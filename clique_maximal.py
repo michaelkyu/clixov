@@ -3,12 +3,13 @@ import igraph
 import numpy as np
 from clique_atomic import *
 from clixov_utils import trim_cliques
+from constants import cache
 
 #interest = [1640, 2670, 4782, 6681, 6918]
 #interest = [1640, 2670, 6681, 6918]
 interest = []
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def BKPivotSparse2(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos, G_start, G_end, G_indices, PXbuf, depth,
                    cliques, cliques_indptr, cliques_n):
     R = R_buff[:R_end]    
@@ -109,7 +110,7 @@ def BKPivotSparse2_wrapper(G, PX=None):
     cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
     return cliques, cliques_indptr, cliques_n
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                         G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
                         PXbuf, depth, cliques, cliques_indptr, cliques_n, tree_size):
@@ -211,7 +212,7 @@ def BKPivotSparse2_Gsep_wrapper(Gold, Gnew):
     return cliques, cliques_indptr, cliques_n
 
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                         G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
                         PXbuf, depth,
@@ -884,7 +885,6 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         #     print depth, 'P:', P.tolist()
             
     return cliques, cliques_indptr, cliques_n, tree_size
-
 
 def BK_hier_Gsep_wrapper(Gold, Gnew, H):
     k = Gold.shape[0]

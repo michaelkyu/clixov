@@ -7,56 +7,61 @@ import clixov_utils
 import clique_maximal
 import clique_maximum
 import clique_maxcover
+from constants import cache
 
-def test_clique_maximal(method, k, r, s):
+def test_clique_maximal(method, k, r, s, check=True):
     G = get_test_network(method, k=k, r=r, s=s)
     start = time.time()
     cliques, cliques_indptr, cliques_n = clique_maximal.BKPivotSparse2_wrapper(G)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
-    
-    tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-    tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
-    assert set(tmp1) == set(tmp2)    
 
-def test_clique_maximal_new(method, k, r, s):
+    if check:
+        tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
+        assert set(tmp1) == set(tmp2)    
+
+def test_clique_maximal_new(method, k, r, s, check=True):
     Gold, Gnew = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
     start = time.time()
     cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BKPivotSparse2_Gnew_wrapper(Gold, Gnew)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, Gold.shape[0])
-    
-    tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-    tmp2 = clique_maximal.get_cliques_igraph(Gold.shape[0], Gold + Gnew, Gnew, input_fmt='matrix')
-    assert set(tmp1) == set(tmp2)
 
-def test_clique_maximum(method, k, r, s, seed=None, verbose=False):
+    if check:
+        tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+        tmp2 = clique_maximal.get_cliques_igraph(Gold.shape[0], Gold + Gnew, Gnew, input_fmt='matrix')
+        assert set(tmp1) == set(tmp2)
+
+def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
     G = get_test_network(method, k=k, r=r, s=s, seed=seed)
     start = time.time()
-    cliques, _, __size = clique_maximu.MC_py(G)
+    cliques, _, __size = clique_maximum.MC_py(G)
     print 'Time:', time.time() - start
-    tmp1 = clixov_utils.csc_to_cliques_list(cliques)
 
-    tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
-    tmp2 = clixov_utils.tuples_to_csc(tmp2, G.shape[0])
-    tmp2, _ = get_largest_cliques(tmp2)
-    tmp2 = csc_to_cliques_list(tmp2)
-    
-    if verbose:
-        print clixov_utils.sparse_str(G)
-    
-    try:
-        assert set(tmp1) == set(tmp2)
-    except:
+    if check:
+        tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+            
+        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
+        tmp2 = clixov_utils.tuples_to_csc(tmp2, G.shape[0])
+        tmp2, _ = clixov_utils.get_largest_cliques(tmp2)
+        tmp2 = clixov_utils.csc_to_cliques_list(tmp2)
+
         if verbose:
-            print 'Shared:', sorted(set(tmp1) & set(tmp2))
-            print 'Found:', sorted(set(tmp1) - set(tmp2))
-            print 'Not found:', sorted(set(tmp2) - set(tmp1))
-        raise
-        
-    print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
+            print clixov_utils.sparse_str(G)
 
-def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False):
+        try:
+            assert set(tmp1) == set(tmp2)
+        except:
+            if verbose:
+                print 'Shared:', sorted(set(tmp1) & set(tmp2))
+                print 'Found:', sorted(set(tmp1) - set(tmp2))
+                print 'Not found:', sorted(set(tmp2) - set(tmp1))
+            raise
+
+        print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
+
+def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False, check=True):
     Gold, Gnew = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
     start = time.time()
     cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew)
@@ -65,32 +70,29 @@ def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False):
 
     cover_idx = clixov_utils.get_largest_clique_covers(cliques, Gnew)
     cliques = cliques[:,cover_idx]
-    
-    tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-    tmp2 = clique_maxcover.max_clique_cover(Gnew, Gold + Gnew, verbose=verbose)
 
-#    print tmp1
-#    print tmp2
+    if check:
+        tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+        start = time.time()
+        tmp2 = clique_maxcover.max_clique_cover(Gnew, Gold + Gnew, verbose=verbose)
+        print 'Alternative time:', time.time() - start
 
-    try:
-        assert set(tmp1) == set(tmp2)
-    except:
-#        if verbose:
-        if True:
-            print 'Shared:', sorted(set(tmp1) & set(tmp2))
-            G = Gold + Gnew
-            print 'Found:', sorted(set(tmp1) - set(tmp2))
-            print 'Not found:', sorted(set(tmp2) - set(tmp1))
-            for c in sorted(set(tmp1) - set(tmp2)):
-                try:
-                    clixov_utils.assert_clique(c, G)
-                except:
-                    print 'Not a real clique:', c
-                    print G[:,c][c,:].toarray().astype(np.int32)
-                    raise
-        raise
-
-    #assert set(tmp1) == set(tmp2)
+        try:
+            assert set(tmp1) == set(tmp2)
+        except:
+            if verbose:
+                print 'Shared:', sorted(set(tmp1) & set(tmp2))
+                G = Gold + Gnew
+                print 'Found:', sorted(set(tmp1) - set(tmp2))
+                print 'Not found:', sorted(set(tmp2) - set(tmp1))
+                for c in sorted(set(tmp1) - set(tmp2)):
+                    try:
+                        clixov_utils.assert_clique(c, G)
+                    except:
+                        print 'Not a real clique:', c
+                        print G[:,c][c,:].toarray().astype(np.int32)
+                        raise
+            raise
 
 def get_test_network(method, k, r, s, invert=False, seed=None):
     start = time.time()
@@ -139,7 +141,7 @@ def get_test_network(method, k, r, s, invert=False, seed=None):
         np.fill_diagonal(G, 0)
         G = csc_matrix(G)
     
-    print 'Simulation time:', time.time() - start
+    #print 'Simulation time:', time.time() - start
     return G
 
 def get_test_new_network(method, k=None, r=None, s=None, p=0.5, seed=None, verbose=False):

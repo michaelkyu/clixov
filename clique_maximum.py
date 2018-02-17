@@ -19,8 +19,11 @@ import clixov_utils
 import clique_maximal
 from clixov_utils import *
 from clique_atomic import *
+from constants import cache
+from degeneracy import get_degeneracy
+from color import color_nodes
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def MC(R_buff, R_end, PX, pos,
        G_start, G_end, G_indices,
        PXbuf, PXbuf2, depth,
@@ -33,7 +36,7 @@ def MC(R_buff, R_end, PX, pos,
     old_sep = sep        
     
     for v in range(PX.size):
-#         if verbose:  print '-----------------------\nConsidering  v:', v
+#         if verbose:  print '-----------------------\nTesting v:', v
         
         if (core_nums[v] + 1) >= (max_cover + offset):
             new_sep, P = update_P(G_indices, G_start, G_end, PX, old_sep, sep, pos, v)
@@ -51,8 +54,6 @@ def MC(R_buff, R_end, PX, pos,
                     PXbuf[P] = False
 
                     colors, branches = color_nodes(G_indices, G_start, G_end, np.sort(P.copy())[::-1])
-#                     print 'branches/colors:', zip(branches,colors)
-#                     print 'colors.max()', colors.max()
                     if (1 + colors.max()) >= (max_cover + offset):
                         tree_size = update_tree_size_branch(tree_size, curr_tree_size, v, 1 + colors.max(), new_sep)
                         R_buff[R_end] = v            
@@ -83,7 +84,7 @@ def MC(R_buff, R_end, PX, pos,
     cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
     return cliques, cliques_indptr, cliques_n, tree_size, max_cover
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def MC_Branch(R_buff, R_end, PX, sep, pos,
               G_start, G_end, G_indices,
               PXbuf, PXbuf2, depth,
@@ -222,12 +223,14 @@ def MC_py(G, max_cover=0, offset=0, verbose=False):
         print 'core_num2:', core_num2
     
     start_time = time.time()    
-    cliques, cliques_indptr, cliques_n, tree_size, max_cover = MC(R_buff, R_end, PX, pos,
-           G_start, G_end, G_indices,
-           PXbuf, PXbuf2, depth,
-           max_cover,
-           cliques, cliques_indptr, cliques_n, core_num, core_num2,
-           tree_size, offset=offset, verbose=verbose)
+    cliques, cliques_indptr, cliques_n, tree_size, max_cover = MC(
+        R_buff, R_end, PX, pos,
+        G_start, G_end, G_indices,
+        PXbuf, PXbuf2, depth,
+        max_cover,
+        cliques, cliques_indptr, cliques_n, core_num, core_num2,
+        tree_size, offset=offset, verbose=verbose)
+    
     if verbose:
         print 'Time:', time.time() - start_time
     
