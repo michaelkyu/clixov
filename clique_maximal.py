@@ -7,11 +7,13 @@ from constants import cache
 
 #interest = [1640, 2670, 4782, 6681, 6918]
 #interest = [1640, 2670, 6681, 6918]
+#interest = [326, 34, 247, 328]
 interest = []
 
 @jit(nopython=True, cache=cache)
-def BKPivotSparse2(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos, G_start, G_end, G_indices, PXbuf, depth,
-                   cliques, cliques_indptr, cliques_n):
+def BKPivotSparse2(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
+                   GS, GE, GI, PXbuf, depth,
+                   C, CP, CN):
     R = R_buff[:R_end]    
     P, X = PX[PS:sep], PX[sep:XE]
     
@@ -23,51 +25,52 @@ def BKPivotSparse2(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos, G_start, G
     
     if P.size==0:
         if X.size==0:
-            cliques, cliques_indptr, cliques_n = update_cliques2(cliques, cliques_indptr, cliques_n, R)
-        return cliques, cliques_indptr, cliques_n
+            C, CP, CN = update_cliques2(C, CP, CN, R)
+        return C, CP, CN
 
 #     u = -1
 #     max_degree = -1
 #     within_P_degree = 0
 #     for v in P:
-#         v_degree, curr = move_PX(G_indices, G_start, G_end,
-#                                  pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])                
+#         v_degree, curr = move_PX(GI, GS, GE,
+#                                  pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])                
 #         if v_degree > max_degree:
 #             max_degree, u, u_curr = v_degree, v, curr
 #         within_P_degree += v_degree
 #     max_X_to_P_degree = 0
 #     for v in X:
-#         v_degree, curr = move_PX(G_indices, G_start, G_end,
-#                                  pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])                
+#         v_degree, curr = move_PX(GI, GS, GE,
+#                                  pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])                
 #         if v_degree > max_degree:
 #             max_degree, u, u_curr = v_degree, v, curr
 #         max_X_to_P_degree = max(max_X_to_P_degree, v_degree)
 #     if within_P_degree==P.size * (P.size -1):
 #         if max_X_to_P_degree < P.size:
 #             R_buff[R_end : R_end + P.size] = P
-#             cliques, cliques_indptr, cliques_n = update_cliques2(cliques, cliques_indptr, cliques_n, R_buff[:R_end + P.size])
-#         return cliques, cliques_indptr, cliques_n
+#             C, CP, CN = update_cliques2(C, CP, CN, R_buff[:R_end + P.size])
+#         return C, CP, CN
 
     u = -1
     max_degree = -1
     for v in PX[PS:XE]:
-        v_degree, curr = move_PX(G_indices, G_start, G_end,
-                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])                
+        v_degree, curr = move_PX(GI, GS, GE,
+                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])                
         if v_degree > max_degree:
             max_degree, u, u_curr = v_degree, v, curr
 
-    Padj_u = pos[G_indices[G_start[u] : u_curr]]
+    Padj_u = pos[GI[GS[u] : u_curr]]
     PXbuf[Padj_u] = False
     branches = P[PXbuf[PS:sep]]
     PXbuf[Padj_u] = True
     
     for v in branches:
-        new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)            
+        new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)            
         R_buff[R_end] = v
             
-        cliques, cliques_indptr, cliques_n = BKPivotSparse2(R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                                                            G_start, G_end, G_indices, PXbuf, depth+1,
-                                                            cliques, cliques_indptr, cliques_n)
+        C, CP, CN = BKPivotSparse2(
+            R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
+            GS, GE, GI, PXbuf, depth+1,
+            C, CP, CN)
         
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -79,7 +82,7 @@ def BKPivotSparse2(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos, G_start, G
         swap_pos(PX, pos, v, sep)
         sep += 1
     
-    return cliques, cliques_indptr, cliques_n        
+    return C, CP, CN        
 
 def BKPivotSparse2_wrapper(G, PX=None):
     if PX is None:
@@ -100,24 +103,25 @@ def BKPivotSparse2_wrapper(G, PX=None):
     PXbuf = np.zeros(k, np.bool_)
     PXbuf2 = np.ones(k, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])            
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0
     
-    cliques, cliques_indptr, cliques_n = BKPivotSparse2(R, R_end, PX, PS, sep, XE, PS, XE, pos,
-                                                         G.indptr[:-1], G.indptr[1:], G.indices,
-                                                         PXbuf2, 0, cliques, cliques_indptr, cliques_n)
+    C, CP, CN = BKPivotSparse2(
+        R, R_end, PX, PS, sep, XE, PS, XE, pos,
+        G.indptr[:-1], G.indptr[1:], G.indices,
+        PXbuf2, 0, C, CP, CN)
 
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
-    return cliques, cliques_indptr, cliques_n
+    C, CP, CN = trim_cliques(C, CP, CN)
+    return C, CP, CN
 
 @jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                        G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
-                        PXbuf, depth, cliques, cliques_indptr, cliques_n, tree_size):
-    if tree_size.size <= 4 + tree_size[0]:
-        tree_size = np.concatenate((tree_size, np.empty(tree_size.size, tree_size.dtype)))
-    tree_size[2+tree_size[0]] = depth
-    tree_size[0] += 1
+                        GS, GE, GI, GS_new, GE_new, GI_new,
+                        PXbuf, depth, C, CP, CN, tree):
+    if tree.size <= 4 + tree[0]:
+        tree = np.concatenate((tree, np.empty(tree.size, tree.dtype)))
+    tree[2+tree[0]] = depth
+    tree[0] += 1
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
@@ -130,18 +134,18 @@ def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'R:', R, 'P:', P, 'X:', X
     
     if P.size==0:
-        tree_size[1] += 1
+        tree[1] += 1
         if X.size==0:
-            cliques, cliques_indptr, cliques_n = update_cliques2(cliques, cliques_indptr, cliques_n, R)
-        return cliques, cliques_indptr, cliques_n, tree_size
+            C, CP, CN = update_cliques2(C, CP, CN, R)
+        return C, CP, CN, tree
 
     u = -1
     max_degree = -1
     for v in PX[PS:XE][::-1]:
-        v_degree, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
-        v_degree, curr = move_PX(G_indices, G_start, G_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, v_degree, v, G_start[v])   
+        v_degree, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
+        v_degree, curr = move_PX(GI, GS, GE,
+                                     pos, oldPS, oldXE, PS, XE, sep, v_degree, v, GS[v])   
         if v_degree > max_degree: 
             max_degree = v_degree
             u, u_curr, u_curr_new = v, curr, curr_new
@@ -150,8 +154,8 @@ def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     if pos[u] < sep:
 #         swap_pos(PX, pos, u, PS)
         
-    Padj_u = pos[G_indices[G_start[u] : u_curr]]
-    Padj_new_u = pos[Gnew_indices[Gnew_start[u] : u_curr_new]]
+    Padj_u = pos[GI[GS[u] : u_curr]]
+    Padj_new_u = pos[GI_new[GS_new[u] : u_curr_new]]
     
     PXbuf[Padj_u] = False
     PXbuf[Padj_new_u] = False
@@ -167,16 +171,17 @@ def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     for v in branches:
 #         print indent, 'branching at v:', v
         
-        new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
-        new_PS, new_XE = update_PX(Gnew_indices, Gnew_start, Gnew_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
+        new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
+        new_PS, new_XE = update_PX(GI_new, GS_new, GE_new, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
 
         R_buff[R_end] = v
 
-        cliques, cliques_indptr, cliques_n, tree_size = BKPivotSparse2_Gsep(R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                                                                G_start, G_end, G_indices,
-                                                                Gnew_start, Gnew_end, Gnew_indices,
-                                                                PXbuf, depth+1,
-                                                                cliques, cliques_indptr, cliques_n, tree_size)        
+        C, CP, CN, tree = BKPivotSparse2_Gsep(
+            R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
+            GS, GE, GI,
+            GS_new, GE_new, GI_new,
+            PXbuf, depth+1,
+            C, CP, CN, tree)        
 
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -187,7 +192,7 @@ def BKPivotSparse2_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         swap_pos(PX, pos, v, sep)
         sep += 1
 
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
 def BKPivotSparse2_Gsep_wrapper(Gold, Gnew):
     k = Gold.shape[0]
@@ -201,30 +206,32 @@ def BKPivotSparse2_Gsep_wrapper(Gold, Gnew):
     PXbuf2 = np.ones(PX.size, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
     
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0    
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0    
     
-    cliques, cliques_indptr, cliques_n, tree_size = BKPivotSparse2_Gsep(R, R_end, PX, PS, sep, XE, PS, XE, pos,
-                                                         Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
-                                                         Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
-                                                         PXbuf2, 0, cliques, cliques_indptr, cliques_n)
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
-    return cliques, cliques_indptr, cliques_n
+    C, CP, CN, tree = BKPivotSparse2_Gsep(
+        R, R_end, PX, PS, sep, XE, PS, XE, pos,
+        Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
+        Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
+        PXbuf2, 0, C, CP, CN)
+    
+    C, CP, CN = trim_cliques(C, CP, CN)
+    return C, CP, CN
 
 
 @jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                        G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
+                        GS, GE, GI, GS_new, GE_new, GI_new,
                         PXbuf, depth,
-                        between_new, between_stack, between_end,
-                        cliques, cliques_indptr, cliques_n, tree_size):
+                        btw_new, btw_stack, btw_end,
+                        C, CP, CN, tree):
     """
-    between_new[v]: Is there a new edge crossing between R and node v in P?
+    btw_new[v]: Is there a new edge crossing btw R and node v in P?
     """
-    if tree_size.size <= 4 + tree_size[0]:
-        tree_size = np.concatenate((tree_size, np.empty(tree_size.size, tree_size.dtype)))
-    tree_size[2+tree_size[0]] = depth
-    tree_size[0] += 1
+    if tree.size <= 4 + tree[0]:
+        tree = np.concatenate((tree, np.empty(tree.size, tree.dtype)))
+    tree[2+tree[0]] = depth
+    tree[0] += 1
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
@@ -235,11 +242,11 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'PX:', PX
 #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
 #     print indent, 'R:', R, 'P:', P, 'X:', X
-#     print indent, 'between_new:', between_new.astype(np.int32)
+#     print indent, 'btw_new:', btw_new.astype(np.int32)
 
     if P.size==0:
-        tree_size[1] += 1
-        return cliques, cliques_indptr, cliques_n, tree_size
+        tree[1] += 1
+        return C, CP, CN, tree
     
     incd = np.empty(sep - PS, PX.dtype)
     incd_count = 0
@@ -249,35 +256,31 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     
     # Iterate over new edges from X too
     for v in X:
-        v_degree_new, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
+        v_degree_new, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
         if v_degree_new > max_degree:
             max_degree = v_degree_new
             u, u_curr_new = v, curr_new
         if v_degree_new > 0:
-            tmp, curr = move_PX(G_indices, G_start, G_end,
-                                pos, oldPS, oldXE, PS, XE, sep, v_degree_new, v, G_start[v])
+            tmp, curr = move_PX(GI, GS, GE,
+                                pos, oldPS, oldXE, PS, XE, sep, v_degree_new, v, GS[v])
             X_incd[X_incd_count] = v
             X_incd_count += 1
     for v in P:
-        v_degree_new, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
+        v_degree_new, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
         if v_degree_new > max_degree:
             max_degree = v_degree_new
             u, u_curr_new, u_incd = v, curr_new, incd_count
-        if v_degree_new > 0 or between_new[v]:
+        if v_degree_new > 0 or btw_new[v]:
             incd[incd_count] = v
             incd_count += 1
             
-    u_curr = G_end[u]
-    
-#     # Move the pivot to the beginning of incd, so that it'll be the first branch
-#     if incd_count > 0 and pos[u] < sep:
-#         incd[0], incd[u_incd] = incd[u_incd], incd[0]        
+    u_curr = GE[u]
 
     if incd_count == 0:
-        tree_size[1] += 1
-        return cliques, cliques_indptr, cliques_n, tree_size
+        tree[1] += 1
+        return C, CP, CN, tree
     incd = incd[:incd_count]
     X_incd = X_incd[:X_incd_count]
     
@@ -290,17 +293,17 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     
     for v in incd:
         v_degree_old = 0
-        curr = G_start[v]
+        curr = GS[v]
         
         # Move P and X to the bottom
-        for w_i in range(G_start[v], G_end[v]):
-            w = G_indices[w_i]
+        for w_i in range(GS[v], GE[v]):
+            w = GI[w_i]
             w_pos = pos[w]
             if w_pos < oldPS or w_pos >= oldXE:
                 break
             elif PS <= w_pos and w_pos < XE:
                 v_degree_old += w_pos < sep
-                G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+                GI[curr], GI[w_i] = w, GI[curr]
                 curr += 1
                 
                 if PXbuf[w]:
@@ -315,19 +318,19 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     
     # Only needed if we eventually call Gsep. If only returning clique "branch roots" over new edges, then this is not needed
     for v in new_incd:
-        v_degree_old, curr = move_PX(G_indices, G_start, G_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])
+        v_degree_old, curr = move_PX(GI, GS, GE,
+                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
     
     #--------------------------------#
 
-    Padj_u = G_indices[G_start[u] : u_curr]
-    Padj_new_u = Gnew_indices[Gnew_start[u] : u_curr_new]    
+    Padj_u = GI[GS[u] : u_curr]
+    Padj_new_u = GI_new[GS_new[u] : u_curr_new]    
     
     PXbuf[Padj_u] = False
     PXbuf[Padj_new_u] = False
     
-    # Always keep the between_new
-    PXbuf[P[between_new[P]]] = True
+    # Always keep the btw_new
+    PXbuf[P[btw_new[P]]] = True
     
     # Some vertices will not be reachable because we've already
     # removed a lot of nodes. Expand to find a vertex cover of incd.
@@ -335,7 +338,7 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         if not PXbuf[v]:
             # By construction because of move_PX above, this will only
             # iterate over w's that are in incd
-            for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]]:
+            for w in GI_new[GS_new[v] : GE_new[v]]:
                 w_pos = pos[w]
                 PXbuf[w] = True
                 if w_pos < PS or w_pos >= XE:
@@ -343,7 +346,7 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 
     branches = incd[PXbuf[incd]]
 
-#     # Alternative to setting P_between_new to True and finding vertex cover of incd. Empirically slower
+#     # Alternative to setting P_btw_new to True and finding vertex cover of incd. Empirically slower
 #     tmp = new_incd[pos[new_incd] < sep]
 #     branches = np.concatenate((incd[PXbuf[incd]], tmp[PXbuf[tmp]]))
 
@@ -360,18 +363,18 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     for v in branches:
 #         print indent, 'branching at:', v
                 
-        new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
+        new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
         
-        between_added = 0
-        for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]]:
+        btw_added = 0
+        for w in GI_new[GS_new[v] : GE_new[v]]:
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)                
-                if not between_new[w]:
-                    between_stack[between_end + between_added] = w
-                    between_added += 1
-                    between_new[w] = True
+                if not btw_new[w]:
+                    btw_stack[btw_end + btw_added] = w
+                    btw_added += 1
+                    btw_new[w] = True
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
                 new_XE += 1
@@ -379,21 +382,24 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 break
 
         R_buff[R_end] = v
-        if between_new[v]:
-            cliques, cliques_indptr, cliques_n, tree_size = BKPivotSparse2_Gsep(R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                                                                    G_start, G_end, G_indices,
-                                                                    Gnew_start, Gnew_end, Gnew_indices,
-                                                                    PXbuf, depth+1,
-                                                                    cliques, cliques_indptr, cliques_n, tree_size)
+        if btw_new[v]:
+            C, CP, CN, tree = BKPivotSparse2_Gsep(
+                R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
+                GS, GE, GI,
+                GS_new, GE_new, GI_new,
+                PXbuf, depth+1,
+                C, CP, CN, tree)
         else:
-            cliques, cliques_indptr, cliques_n, tree_size = BKPivotSparse2_Gnew(R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                                                    G_start, G_end, G_indices,
-                                                    Gnew_start, Gnew_end, Gnew_indices,
-                                                    PXbuf, depth+1,
-                                                    between_new, between_stack, between_end + between_added,
-                                                    cliques, cliques_indptr, cliques_n, tree_size)
-        # Reset the between_new
-        between_new[between_stack[between_end : between_end + between_added]] = False
+            C, CP, CN, tree = BKPivotSparse2_Gnew(
+                R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
+                GS, GE, GI,
+                GS_new, GE_new, GI_new,
+                PXbuf, depth+1,
+                btw_new, btw_stack, btw_end + btw_added,
+                C, CP, CN, tree)
+            
+        # Reset the btw_new
+        btw_new[btw_stack[btw_end : btw_end + btw_added]] = False
 
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -404,9 +410,9 @@ def BKPivotSparse2_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         swap_pos(PX, pos, v, sep)
         sep += 1
 
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
-def BKPivotSparse2_Gnew_wrapper(Gold, Gnew, PX=None, between_new=None):
+def BKPivotSparse2_Gnew_wrapper(Gold, Gnew, PX=None, btw_new=None):
     if PX is None:
         k = Gold.shape[0]
         PX = np.arange(k).astype(np.int32)
@@ -428,71 +434,66 @@ def BKPivotSparse2_Gnew_wrapper(Gold, Gnew, PX=None, between_new=None):
     PXbuf2 = np.ones(k, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
     
-    between_stack = np.arange(PX.max() + 1).astype(np.int32)
-    if between_new is None:
-        between_new = np.zeros(PX.max() + 1, np.bool_)        
-        between_end = 0
+    btw_stack = np.arange(PX.max() + 1).astype(np.int32)
+    if btw_new is None:
+        btw_new = np.zeros(PX.max() + 1, np.bool_)        
+        btw_end = 0
     else:
-        between_end = between_new.sum()
-        between_stack[:between_end] = between_new.nonzero()[0]
+        btw_end = btw_new.sum()
+        btw_stack[:btw_end] = btw_new.nonzero()[0]
 
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0
     
-    tree_size = np.asfortranarray(np.zeros(1000, np.int32))
-    tree_size[:2] = np.array([0, 0], np.int32)
+    tree = np.asfortranarray(np.zeros(1000, np.int32))
+    tree[:2] = np.array([0, 0], np.int32)
     
-    cliques, cliques_indptr, cliques_n, tree_size = BKPivotSparse2_Gnew(R, R_end, PX, PS, sep, XE, PS, XE, pos,
-                                                         Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
-                                                         Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
-                                                         PXbuf2, 0, between_new, between_stack, between_end,
-                                                        cliques, cliques_indptr, cliques_n, tree_size)
-#     print 'tree_size:', tree_size[:2]
+    C, CP, CN, tree = BKPivotSparse2_Gnew(
+        R, R_end, PX, PS, sep, XE, PS, XE, pos,
+        Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
+        Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
+        PXbuf2, 0, btw_new, btw_stack, btw_end,
+        C, CP, CN, tree)
 
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
-    return cliques, cliques_indptr, cliques_n, tree_size
+    C, CP, CN = trim_cliques(C, CP, CN)
+    return C, CP, CN, tree
 
 
-#@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def BK_hier_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                 G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
+                 GS, GE, GI, GS_new, GE_new, GI_new,
                  H_start, H_end, H_indices,
                  topo,
-                 PXbuf, depth, cliques, cliques_indptr, cliques_n, tree_size):
-    if tree_size.size <= 4 + tree_size[0]:
-        tree_size = np.concatenate((tree_size, np.empty(tree_size.size, tree_size.dtype)))
-    tree_size[2+tree_size[0]] = depth
-    tree_size[0] += 1
+                 PXbuf, depth, C, CP, CN, tree):
+    if tree.size <= 4 + tree[0]:
+        tree = np.concatenate((tree, np.empty(tree.size, tree.dtype)))
+    tree[2+tree[0]] = depth
+    tree[0] += 1
 
+#    verbose = (depth > 0 and all(x in interest for x in R_buff[:R_end]))
 #    verbose = (depth > 0 and R_buff[0] in interest)
     verbose = False
+#    verbose = True
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
     
-    indent = '\t' * depth
-
-    if verbose:
-        print indent, '----Gsep-----------'
-        print indent, 'DEPTH:', depth
-        print indent, 'PX:', PX
-        print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
-        print indent, 'R:', R, 'P:', P, 'X:', X
-
-    # print indent, '---------------'
-    # print indent, 'DEPTH:', depth
-    # print indent, 'PX:', PX
-    # print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
-    # print indent, 'R:', R, 'P:', P, 'X:', X
+    # indent = '\t' * depth
+    # if verbose:
+    #     print indent, '----Gsep-----------'
+    #     print indent, 'DEPTH:', depth
+    #     print indent, 'PX:', PX
+    #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
+    #     print indent, 'R:', R, 'P:', P, 'X:', X
     
     if P.size==0:
-        if verbose and R_buff[0] in interest:
-            print indent, depth, 'Returning', 'R:', R, 'P:', P, 'X:', X
+        # if verbose:
+        #     print indent, depth, 'Returning', 'R:', R, 'P:', P, 'X:', X
             
-        tree_size[1] += 1
+        tree[1] += 1
         if X.size==0:
-            cliques, cliques_indptr, cliques_n = update_cliques2(cliques, cliques_indptr, cliques_n, R)
-        return cliques, cliques_indptr, cliques_n, tree_size
+            C, CP, CN = update_cliques2(C, CP, CN, R)
+        return C, CP, CN, tree
         
     # Filter branches. Follow the topological sorting, going top-down
     # the hierarchy
@@ -513,31 +514,32 @@ def BK_hier_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 if PXbuf[v]:
                     PXbuf[w] = False
 
-        if verbose:
-            print indent, 'v:', v, 'H to curr:', H_indices[H_start[v] : curr]
-            print indent, 'v:', v, 'H to end:', H_indices[H_start[v] : H_end[v]]
+        # if verbose:
+        #     print indent, 'v:', v, 'H to curr:', H_indices[H_start[v] : curr]
+        #     print indent, 'v:', v, 'H to end:', H_indices[H_start[v] : H_end[v]]
                     
     branches = P[PXbuf[P]]
 
-    if verbose:
-        print indent, 'branches:', branches.tolist()
+    # if verbose:
+    #     print indent, 'branches:', branches
         
     u = -1
     max_degree = -1
     for v in PX[PS:XE][::-1]:
-        v_degree, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
-        v_degree, curr = move_PX(G_indices, G_start, G_end,
-                                 pos, oldPS, oldXE, PS, XE, sep, v_degree, v, G_start[v])
+        v_degree, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
+        v_degree, curr = move_PX(GI, GS, GE,
+                                 pos, oldPS, oldXE, PS, XE, sep, v_degree, v, GS[v])
         if PXbuf[v] and (v_degree > max_degree): 
             max_degree = v_degree
             u, u_curr, u_curr_new = v, curr, curr_new
 
+    # TODO: make this more efficient by not having to make it |P| time
     PXbuf[P] = True
-    assert np.all(PXbuf)
+#    assert np.all(PXbuf)
     
-    Padj_u = pos[G_indices[G_start[u] : u_curr]]
-    Padj_new_u = pos[Gnew_indices[Gnew_start[u] : u_curr_new]]
+    Padj_u = GI[GS[u] : u_curr]
+    Padj_new_u = GI_new[GS_new[u] : u_curr_new]
 
     PXbuf[Padj_u] = False
     PXbuf[Padj_new_u] = False
@@ -545,22 +547,20 @@ def BK_hier_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     branches = branches[PXbuf[branches]]
     PXbuf[Padj_u] = True
     PXbuf[Padj_new_u] = True
-        
-#     print indent, 'pivot u:', u
-#     print indent, 'Padj_u:', Padj_u
-#     print indent, 'Padj_new_u:', Padj_new_u
-#     print indent, 'branches:', branches
 
-    if verbose:
-        print indent, 'branches:', branches.tolist()
+    # if verbose:
+    #     print indent, 'pivot u:', u
+    #     print indent, 'Padj_u:', Padj_u
+    #     print indent, 'Padj_new_u:', Padj_new_u
+    #     print indent, 'branches:', branches
 
     branches = branches[np.argsort(topo[branches])]
     
     for v in branches:
 #         print indent, 'branching at v:', v
 
-        new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
-        new_PS, new_XE = update_PX(Gnew_indices, Gnew_start, Gnew_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
+        new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
+        new_PS, new_XE = update_PX(GI_new, GS_new, GE_new, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
 
         for w in H_indices[H_start[v] : H_end[v]]:
             w_pos = pos[w]
@@ -573,19 +573,19 @@ def BK_hier_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             elif (w_pos < oldPS) or (w_pos >= oldXE):
                 break
 
-        # new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
-        # new_PS, new_XE = update_PX(Gnew_indices, Gnew_start, Gnew_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
+        # new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
+        # new_PS, new_XE = update_PX(GI_new, GS_new, GE_new, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
         
         R_buff[R_end] = v
 
-        cliques, cliques_indptr, cliques_n, tree_size = BK_hier_Gsep(
+        C, CP, CN, tree = BK_hier_Gsep(
             R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-            G_start, G_end, G_indices,
-            Gnew_start, Gnew_end, Gnew_indices,
+            GS, GE, GI,
+            GS_new, GE_new, GI_new,
             H_start, H_end, H_indices,
             topo,
             PXbuf, depth+1,
-            cliques, cliques_indptr, cliques_n, tree_size)        
+            C, CP, CN, tree)        
             
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -596,52 +596,47 @@ def BK_hier_Gsep(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         swap_pos(PX, pos, v, sep)
         sep += 1
 
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
-#@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                 G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,                 
+                 GS, GE, GI, GS_new, GE_new, GI_new,                 
                  H_start, H_end, H_indices,
                  topo,
                  PXbuf, depth,
-                 between_new, between_stack, between_end,
-                 cliques, cliques_indptr, cliques_n, tree_size):
+                 btw_new, btw_stack, btw_end,
+                 C, CP, CN, tree):
     """
-    between_new[v]: Is there a new edge crossing between R and node v in P?
+    btw_new[v]: Is there a new edge crossing btw R and node v in P?
     """
-    if tree_size.size <= 4 + tree_size[0]:
-        tree_size = np.concatenate((tree_size, np.empty(tree_size.size, tree_size.dtype)))
-    tree_size[2+tree_size[0]] = depth
-    tree_size[0] += 1
+    if tree.size <= 4 + tree[0]:
+        tree = np.concatenate((tree, np.empty(tree.size, tree.dtype)))
+    tree[2+tree[0]] = depth
+    tree[0] += 1
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
 
+#    verbose = depth==0 or (depth > 0 and all(x in interest for x in R_buff[:R_end]))
 #    verbose = depth==0 or (depth > 0 and R_buff[0] in interest)
+#    verbose = True
     verbose = False
 
-    indent = '\t' * depth
-    if verbose:
-        print indent, '----Gnew-----------'
-        print indent, 'DEPTH:', depth
-        print indent, 'PX:', PX
-        print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
-        print indent, 'R:', R, 'P:', P, 'X:', X
-        print indent, 'between_new:', between_new.nonzero()[0]
-        
-#     print indent, '---------------'
-#     print indent, 'DEPTH:', depth
-#     print indent, 'PX:', PX
-#     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
-#     print indent, 'R:', R, 'P:', P, 'X:', X
-#     print indent, 'between_new:', between_new.astype(np.int32)
+    # indent = '\t' * depth
+    # if verbose:
+    #     print indent, '----Gnew-----------'
+    #     print indent, 'DEPTH:', depth
+    #     print indent, 'PX:', PX
+    #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
+    #     print indent, 'R:', R, 'P:', P, 'X:', X
+    #     print indent, 'btw_new:', btw_new.nonzero()[0]
 
     if P.size==0:
-        if verbose and (R_buff[0] in interest):
-            print indent, 'Returning', 'R:', R, 'P:', P, 'X:', X
+        # if verbose and (R_buff[0] in interest):
+        #     print indent, 'Returning', 'R:', R, 'P:', P, 'X:', X
 
-        tree_size[1] += 1
-        return cliques, cliques_indptr, cliques_n, tree_size
+        tree[1] += 1
+        return C, CP, CN, tree
     
     incd = np.empty(sep - PS, PX.dtype)
     incd_count = 0
@@ -650,26 +645,26 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     
     # Iterate over new edges from X too
     for v in X:
-        v_degree_new, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
+        v_degree_new, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
         if v_degree_new > 0:
-            tmp, curr = move_PX(G_indices, G_start, G_end,
-                                pos, oldPS, oldXE, PS, XE, sep, v_degree_new, v, G_start[v])
+            tmp, curr = move_PX(GI, GS, GE,
+                                pos, oldPS, oldXE, PS, XE, sep, v_degree_new, v, GS[v])
             X_incd[X_incd_count] = v
             X_incd_count += 1
     for v in P:
-        v_degree_new, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, Gnew_start[v])        
-        if v_degree_new > 0 or between_new[v]:
+        v_degree_new, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, GS_new[v])        
+        if v_degree_new > 0 or btw_new[v]:
             incd[incd_count] = v
             incd_count += 1
 
     if incd_count == 0:
-        if verbose and (R_buff[0] in interest):
-            print indent, 'Returning because incd.size==0', 'R:', R, 'P:', P, 'X:', X
-
-        tree_size[1] += 1
-        return cliques, cliques_indptr, cliques_n, tree_size
+        # if verbose:
+        #     print indent, 'Returning because incd.size==0', 'R:', R, 'P:', P, 'X:', X
+                        
+        tree[1] += 1
+        return C, CP, CN, tree
     incd = incd[:incd_count]
     X_incd = X_incd[:X_incd_count]
 
@@ -696,17 +691,17 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 if is_incd[v] and PXbuf[v]:
                    PXbuf[w] = False
 
-        if verbose and v in interest:
-            print indent, 'v:', v, 'H to curr:', H_indices[H_start[v] : curr]
-            print indent, 'v:', v, 'H to end:', H_indices[H_start[v] : H_end[v]]
+        # if verbose:
+        #     print indent, 'v:', v, 'H to curr:', H_indices[H_start[v] : curr]
+        #     print indent, 'v:', v, 'H to end:', H_indices[H_start[v] : H_end[v]]
             
     branches = incd[PXbuf[incd]]
     PXbuf[P] = True
 
-    if verbose:
-        print indent, 'incd:', incd.tolist()
-#        print indent, 'incd[np.argsort(topo[incd])]', incd[np.argsort(topo[incd])].tolist()
-#        print indent, 'branches:', branches.tolist()
+    # if verbose:
+    #     print indent, 'incd:', incd.tolist()
+    #     #print indent, 'incd[np.argsort(topo[incd])]', incd[np.argsort(topo[incd])].tolist()
+    #     print indent, 'branches:', branches.tolist()
     
     PXbuf[incd] = False
     PXbuf[X_incd] = False
@@ -724,16 +719,16 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     for v in incd:
         if is_branch[v]:
             v_degree_old = 0
-            curr = G_start[v]
+            curr = GS[v]
             # Move P and X to the bottom
-            for w_i in range(G_start[v], G_end[v]):
-                w = G_indices[w_i]
+            for w_i in range(GS[v], GE[v]):
+                w = GI[w_i]
                 w_pos = pos[w]
                 if w_pos < oldPS or w_pos >= oldXE:
                     break
                 elif PS <= w_pos and w_pos < XE:
                     v_degree_old += w_pos < sep
-                    G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+                    GI[curr], GI[w_i] = w, GI[curr]
                     curr += 1
 
                     if PXbuf[w]:
@@ -741,12 +736,14 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                         new_incd_end += 1
                         PXbuf[w] = False
         else:
-            v_degree_old, curr = move_PX(G_indices, G_start, G_end,
-                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])
+            v_degree_old, curr = move_PX(GI, GS, GE,
+                                         pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
 
-        v_degree, curr_new = move_PX(Gnew_indices, Gnew_start, Gnew_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, v_degree_old, v, Gnew_start[v])
-        if v_degree > max_degree:
+        v_degree, curr_new = move_PX(GI_new, GS_new, GE_new,
+                                     pos, oldPS, oldXE, PS, XE, sep, v_degree_old, v, GS_new[v])
+        
+#        if v_degree > max_degree:
+        if is_branch[v] and v_degree > max_degree:
             max_degree = v_degree
             u, u_curr_new, u_curr = v, curr_new, curr
                     
@@ -758,28 +755,30 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     # Only needed if we eventually call Gsep. If only returning clique
     # "branch roots" over new edges, then this is not needed
     for v in new_incd:
-        v_degree_old, curr = move_PX(G_indices, G_start, G_end,
-                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])
+        v_degree_old, curr = move_PX(GI, GS, GE,
+                                     pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
     
     #--------------------------------#
 
-    Padj_u = G_indices[G_start[u] : u_curr]
-    Padj_new_u = Gnew_indices[Gnew_start[u] : u_curr_new]    
+    Padj_u = GI[GS[u] : u_curr]
+    Padj_new_u = GI_new[GS_new[u] : u_curr_new]    
     
     PXbuf[Padj_u] = False
     PXbuf[Padj_new_u] = False
     
-    # Always keep the between_new
-    PXbuf[P[between_new[P]]] = True
-    
-    # Some vertices will not be reachable because we've already
-    # removed a lot of nodes. Expand to find a vertex cover of incd.
+    # Always keep the btw_new
+    PXbuf[P[btw_new[P]]] = True
+        
+    # Some vertices in incd will not be reachable because we've already
+    # removed a lot of nodes. Expand to find a vertex cover of the new edges.
 #    for v in incd[~ PXbuf[incd]]:
     for v in branches[~ PXbuf[branches]]:
         if not PXbuf[v]:
             # By construction because of move_PX above, this will only
             # iterate over w's that are in incd
-            for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]]:
+            for w in GI_new[GS_new[v] : GE_new[v]]:
+                # if verbose:
+                #     print indent, 'v:', v, 'w:', w
                 w_pos = pos[w]
                 PXbuf[w] = True
                 if w_pos < PS or w_pos >= XE:
@@ -788,40 +787,38 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #    branches = incd[PXbuf[incd]]
     branches = branches[PXbuf[branches]]
 
-#     # Alternative to setting P_between_new to True and finding vertex cover of incd. Empirically slower
+#     # Alternative to setting P_btw_new to True and finding vertex cover of incd. Empirically slower
 #     tmp = new_incd[pos[new_incd] < sep]
 #     branches = np.concatenate((incd[PXbuf[incd]], tmp[PXbuf[tmp]]))
 
     PXbuf[Padj_new_u] = True
     PXbuf[Padj_u] = True
-    
-#     print indent, 'pivot u:', u
-#     print indent, 'Padj_u:', Padj_u
-#     print indent, 'Padj_new_u:', Padj_new_u
-#     print indent, 'incd:', incd
-#     print indent, 'new_incd:', new_incd
-#     print indent, 'branches:', branches
 
-    if verbose:
-        print indent, 'branches:', branches.tolist()
+    # if verbose:
+    #     print indent, 'pivot u:', u
+    #     print indent, 'Padj_u:', Padj_u
+    #     print indent, 'Padj_new_u:', Padj_new_u
+    #     print indent, 'incd:', incd
+    #     print indent, 'new_incd:', new_incd
+    #     print indent, 'branches:', branches
 
     branches = branches[np.argsort(topo[branches])]
     
     for v in branches:
-#         print indent, 'branching at:', v
+#        print indent, 'branching at:', v
                 
-        new_PS, new_XE = update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
+        new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)
         
-        between_added = 0
-        for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]]:
+        btw_added = 0
+        for w in GI_new[GS_new[v] : GE_new[v]]:
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)                
-                if not between_new[w]:
-                    between_stack[between_end + between_added] = w
-                    between_added += 1
-                    between_new[w] = True
+                if not btw_new[w]:
+                    btw_stack[btw_end + btw_added] = w
+                    btw_added += 1
+                    btw_new[w] = True
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
                 new_XE += 1
@@ -839,34 +836,34 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             elif (w_pos < oldPS) or (w_pos >= oldXE):
                 break
 
-        if verbose and (v in interest):
-            print indent, 'Branching at v:', v, 'R:', R
-            print indent, 'new P:', PX[new_PS:sep]
-            print indent, 'H[v:end]:', H_indices[H_start[v] : H_end[v]]
+        # if verbose and (v in interest):
+        #     print indent, 'Branching at v:', v, 'R:', R
+        #     print indent, 'new P:', PX[new_PS:sep]
+        #     print indent, 'H[v:end]:', H_indices[H_start[v] : H_end[v]]
             
         R_buff[R_end] = v
-        if between_new[v]:
-            cliques, cliques_indptr, cliques_n, tree_size = BK_hier_Gsep(
+        if btw_new[v]:
+            C, CP, CN, tree = BK_hier_Gsep(
                 R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                G_start, G_end, G_indices,
-                Gnew_start, Gnew_end, Gnew_indices,
+                GS, GE, GI,
+                GS_new, GE_new, GI_new,
                 H_start, H_end, H_indices,
                 topo,
                 PXbuf, depth+1,
-                cliques, cliques_indptr, cliques_n, tree_size)
+                C, CP, CN, tree)
         else:
-            cliques, cliques_indptr, cliques_n, tree_size = BK_hier_Gnew(
+            C, CP, CN, tree = BK_hier_Gnew(
                 R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                G_start, G_end, G_indices,
-                Gnew_start, Gnew_end, Gnew_indices,
+                GS, GE, GI,
+                GS_new, GE_new, GI_new,
                 H_start, H_end, H_indices,
                 topo,
                 PXbuf, depth+1,
-                between_new, between_stack, between_end + between_added,
-                cliques, cliques_indptr, cliques_n, tree_size)
+                btw_new, btw_stack, btw_end + btw_added,
+                C, CP, CN, tree)
             
-        # Reset the between_new
-        between_new[between_stack[between_end : between_end + between_added]] = False
+        # Reset the btw_new
+        btw_new[btw_stack[btw_end : btw_end + btw_added]] = False
 
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -877,16 +874,9 @@ def BK_hier_Gnew(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         swap_pos(PX, pos, v, sep)
         sep += 1
 
-#    if depth==0 or R_buff[0]==55:
-#        print depth, 'Returning R:', R
-        # print depth, 'branches:', branches.tolist()
-        # print depth, 'incd:', incd.tolist()
-        # if depth > 0:
-        #     print depth, 'P:', P.tolist()
-            
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
-def BK_hier_Gsep_wrapper(Gold, Gnew, H):
+def BK_hier_Gsep_wrapper(Gold, Gnew, H, verbose=False):
     k = Gold.shape[0]
     R = np.zeros(k, np.int32)
     R_end = np.int32(0)
@@ -898,27 +888,29 @@ def BK_hier_Gsep_wrapper(Gold, Gnew, H):
     PXbuf2 = np.ones(PX.size, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
 
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0    
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0    
 
     g = igraph.Graph(n=H.shape[0], edges=zip(*H.nonzero()), directed=True)
     topo = np.array(g.topological_sorting(mode='out'))
     
-    tree_size = np.asfortranarray(np.zeros(1000, np.int32))
-    tree_size[:2] = np.array([0, 0], np.int32)
-    
-    cliques, cliques_indptr, cliques_n, tree_size = BK_hier_Gsep(
+    tree = np.asfortranarray(np.zeros(1000, np.int32))
+    tree[:2] = np.array([0, 0], np.int32)
+
+    start = time.time()
+    C, CP, CN, tree = BK_hier_Gsep(
         R, R_end, PX, PS, sep, XE, PS, XE, pos,
         Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
         Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
         H.indptr[:-1], H.indptr[1:], H.indices,
         topo,
-        PXbuf2, 0, cliques, cliques_indptr, cliques_n, tree_size)
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
+        PXbuf2, 0, C, CP, CN, tree)
+    if verbose: print 'BK_hier_Gsep time:', time.time() - start
+    C, CP, CN = trim_cliques(C, CP, CN)
     
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
-def BK_hier_Gnew_wrapper(Gold, Gnew, H):
+def BK_hier_Gnew_wrapper(Gold, Gnew, H, verbose=False):
     k = Gold.shape[0]
     R = np.zeros(k, np.int32)
     R_end = np.int32(0)
@@ -930,37 +922,38 @@ def BK_hier_Gnew_wrapper(Gold, Gnew, H):
     PXbuf2 = np.ones(PX.size, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
 
-    between_stack = np.arange(PX.max() + 1).astype(np.int32)
-    between_new = np.zeros(PX.max() + 1, np.bool_)        
-    between_end = 0
+    btw_stack = np.arange(PX.max() + 1).astype(np.int32)
+    btw_new = np.zeros(PX.max() + 1, np.bool_)        
+    btw_end = 0
 
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0    
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0    
 
     g = igraph.Graph(n=H.shape[0], edges=zip(*H.nonzero()), directed=True)
     topo = np.array(g.topological_sorting(mode='out'))
 
-    print 'interest:', interest
-    print 'topo:', zip(interest, topo[interest])
-    print Gold[interest,:][:,interest].toarray().astype(np.int32)
-    print Gnew[interest,:][:,interest].toarray().astype(np.int32)
-    # 0 / asdf
+    # print 'interest:', interest
+    # print 'topo:', zip(interest, topo[interest])
+    # print Gold[interest,:][:,interest].toarray().astype(np.int32)
+    # print Gnew[interest,:][:,interest].toarray().astype(np.int32)
         
-    tree_size = np.asfortranarray(np.zeros(1000, np.int32))
-    tree_size[:2] = np.array([0, 0], np.int32)
-    
-    cliques, cliques_indptr, cliques_n, tree_size = BK_hier_Gnew(
+    tree = np.asfortranarray(np.zeros(1000, np.int32))
+    tree[:2] = np.array([0, 0], np.int32)
+
+    start = time.time()
+    C, CP, CN, tree = BK_hier_Gnew(
         R, R_end, PX, PS, sep, XE, PS, XE, pos,
         Gold.indptr[:-1], Gold.indptr[1:], Gold.indices,
         Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices,
         H.indptr[:-1], H.indptr[1:], H.indices,
         topo,
         PXbuf2, 0,
-        between_new, between_stack, between_end,
-        cliques, cliques_indptr, cliques_n, tree_size)
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
+        btw_new, btw_stack, btw_end,
+        C, CP, CN, tree)
+    if verbose: print 'BK_hier_Gsep time:', time.time() - start
+    C, CP, CN = trim_cliques(C, CP, CN)
     
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
 def get_cliques_igraph(n, G, Gnew=None, input_fmt='edgelist'):
     if input_fmt=='edgelist':

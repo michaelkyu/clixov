@@ -3,6 +3,7 @@ from numba import jit
 
 from constants import cache
 
+
 @jit(nopython=True, cache=cache)
 def swap_pos(PX, pos, w, PX_idx):
     pos_w = pos[w]
@@ -24,36 +25,36 @@ def update_cliques2(cliques, cliques_indptr, cliques_n, R):
     return cliques, cliques_indptr, new_cliques_n
 
 @jit(nopython=True, cache=cache)
-def move_PX(G_indices, G_start, G_end, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
+def move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
     # Move P and X to the bottom
-    for w_i in range(G_start[v], G_end[v]):
-        w = G_indices[w_i]
+    for w_i in range(GS[v], GE[v]):
+        w = GI[w_i]
         w_pos = pos[w]
         if w_pos < oldPS or w_pos >= oldXE:
             break
         elif PS <= w_pos and w_pos < XE:
             v_degree += w_pos < sep
-            G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+            GI[curr], GI[w_i] = w, GI[curr]
             curr += 1
     return v_degree, curr
 
 @jit(nopython=True, cache=cache)
-def move_PX_2(G_indices, G_start, G_end, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
+def move_PX_2(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
     # Move P and X to the bottom
-    for w_i in range(G_start[v], G_end[v], 2):
-        w = G_indices[w_i]
+    for w_i in range(GS[v], GE[v], 2):
+        w = GI[w_i]
         w_pos = pos[w]
         if w_pos < oldPS or w_pos >= oldXE:
             break
         elif PS <= w_pos and w_pos < XE:
             v_degree += w_pos < sep
-            G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+            GI[curr], GI[w_i] = w, GI[curr]
             curr += 2
     return v_degree, curr
 
 @jit(nopython=True, cache=cache)
-def update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
-    for w in G_indices[G_start[v] : G_end[v]]:
+def update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
+    for w in GI[GS[v] : GE[v]]:
         w_pos = pos[w]
         if (PS <= w_pos) and (w_pos < sep):
             new_PS -= 1
@@ -66,8 +67,8 @@ def update_PX(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, 
     return new_PS, new_XE
 
 @jit(nopython=True, cache=cache)
-def update_PX_skip(G_indices, G_start, G_end, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
-    for w in G_indices[G_start[v] : G_end[v]]:
+def update_PX_skip(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
+    for w in GI[GS[v] : GE[v]]:
         w_pos = pos[w]
         if (PS <= w_pos) and (w_pos < sep):
             new_PS -= 1
@@ -86,51 +87,51 @@ def expand_2d_arr(arr):
     return arr2
 
 @jit(nopython=True, cache=cache)
-def move_PX_fast(G_indices, G_start, G_end, pos, PS, sep, v):
-    """Assumes X is not used, and that all v from G_start to G_end must be
+def move_PX_fast(GI, GS, GE, pos, PS, sep, v):
+    """Assumes X is not used, and that all v from GS to GE must be
     traversed.
 
     """
     
     # Move P and X to the bottom
-    curr = G_start[v]
-    for w_i in range(G_start[v], G_end[v]):
-        w = G_indices[w_i]
+    curr = GS[v]
+    for w_i in range(GS[v], GE[v]):
+        w = GI[w_i]
         w_pos = pos[w]
         if PS <= w_pos and w_pos < sep:
-            G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+            GI[curr], GI[w_i] = w, GI[curr]
             curr += 1
-    return curr - G_start[v], curr
+    return curr - GS[v], curr
 
 
 @jit(nopython=True, cache=cache)
-def move_PX_fast_bool(G_indices, G_start, G_end, in_P, v):
-    """Assumes X is not used, and that all v from G_start to G_end must be
+def move_PX_fast_bool(GI, GS, GE, in_P, v):
+    """Assumes X is not used, and that all v from GS to GE must be
     traversed"""
     
     # Move P and X to the bottom
     curr = 0
-    G_tmp = G_indices[G_start[v] : G_end[v]]
+    G_tmp = GI[GS[v] : GE[v]]
     for w_i in range(G_tmp.size):
         if in_P[G_tmp[w_i]]:
             G_tmp[curr], G_tmp[w_i] = G_tmp[w_i], G_tmp[curr]
             curr += 1
-    return curr, G_start[v] + curr
+    return curr, GS[v] + curr
 
 @jit(nopython=True, cache=cache)
-def update_PX_bool_color(G_indices, G_start, G_end,
-                         Gnew_indices, Gnew_start, Gnew_end,
+def update_PX_bool_color(GI, GS, GE,
+                         GI_new, GS_new, GE_end,
                          nei_bool, colors_v, in_P, pos, PX, sep, v):
     new_PS = sep
     nei_count = 0
-    for w in G_indices[G_start[v] : G_end[v]]:
+    for w in GI[GS[v] : GE[v]]:
         if in_P[w]:
             new_PS -= 1
             swap_pos(PX, pos, w, new_PS)
             w_color = colors_v[w]
             nei_count += not nei_bool[w_color]
             nei_bool[w_color] = True
-    for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]]:
+    for w in GI_new[GS_new[v] : GE_end[v]]:
         if in_P[w]:
             new_PS -= 1
             swap_pos(PX, pos, w, new_PS)
@@ -162,10 +163,10 @@ def update_tree_size_branch(tree_size, curr_tree_size, v, bound, P_size):
     return tree_size
 
 @jit(nopython=True, cache=cache)
-def update_P(G_indices, G_start, G_end, PX, old_sep, sep, pos, v):
+def update_P(GI, GS, GE, PX, old_sep, sep, pos, v):
     new_sep = 0
         
-    for u in G_indices[G_start[v] : G_end[v]]:
+    for u in GI[GS[v] : GE[v]]:
         if pos[u] >= old_sep:
             break
         elif pos[u] < sep:
@@ -174,7 +175,7 @@ def update_P(G_indices, G_start, G_end, PX, old_sep, sep, pos, v):
     return new_sep, PX[ : new_sep]
 
 @jit(nopython=True, cache=cache)
-def reduce_G(G_indices, G_start, G_end,
+def reduce_G(GI, GS, GE,
              PXbuf, core_nums, core_bound, PX, pos, sep):
     changed = False
     for u in PX[ : sep]:
@@ -185,9 +186,9 @@ def reduce_G(G_indices, G_start, G_end,
     P = PX[ : sep]
     
     if changed:
-        # Push down G_indices
+        # Push down GI
         PXbuf[P] = True
         for u in P:
-            u_degree, G_end[u] = move_PX_fast_bool(G_indices, G_start, G_end, PXbuf, u)
+            u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, PXbuf, u)
         PXbuf[P] = False
     return sep, P

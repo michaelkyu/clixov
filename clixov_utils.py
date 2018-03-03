@@ -1,4 +1,4 @@
-import time, itertools
+import time
 import numpy as np
 from scipy.sparse import isspmatrix, isspmatrix_csc, isspmatrix_csr, csc_matrix, csr_matrix
 from collections import OrderedDict, Counter
@@ -7,20 +7,29 @@ from mkl_spgemm import dot
 
 from numba import jit
 
+
 @jit(nopython=True)
 def trim_cliques(cliques, cliques_indptr, cliques_n):
     return cliques[:cliques_indptr[cliques_n]], cliques_indptr[:cliques_n+1], cliques_n
         
-def as_dense(X):    
+# def as_dense(X):    
+#     if isspmatrix(X):
+#         return X.toarray()
+#     elif isinstance(X, np.matrixlib.defmatrix.matrix):
+#         return np.array(X)
+#     else:
+#         return X
+
+def as_dense_array(X, order=None):
     if isspmatrix(X):
-        return X.toarray()
-    elif isinstance(X, np.matrixlib.defmatrix.matrix):
-        return np.array(X)
+        return X.toarray(order=order)
     else:
-        return X
+        if order is None:
+            order = 'K'
+        return np.array(X, order=order)
 
 def as_dense_flat(X):
-    return as_dense(X).reshape(-1)
+    return as_dense_array(X).reshape(-1)
 
 def cliques_to_csc(cliques, cliques_indptr, cliques_n, n, dtype=np.int32, copy=False):
     return csc_matrix((np.ones(cliques.size, dtype), cliques, cliques_indptr),
@@ -164,26 +173,41 @@ def assert_clique(clique, G):
     total = (clique.size * (clique.size-1)) / 2
     assert edges == total, 'Edges: %s, Possible: %s' % (edges, total)
 
-def as_dense_array(X, order=None):
-    if isspmatrix(X):
-        return X.toarray(order=order)
-    else:
-        if order is None:
-            order = 'K'
-        return np.array(X, order=order)
-
-def subsumption(X):
+def subsumption(X, XX=None):
     """
     Returns array sub where sub[i,j]==1 if X[:,i] is a subset of X[:,j], and 0 otherwise.
     """
 
     X_sizes = as_dense_flat(X.sum(0))
-    XX = dot(X.T, X)
-    XX = as_dense_array(XX)
-    X_min_sizes = np.minimum(X_sizes.reshape(-1,1), X_sizes.reshape(1,-1))
-    X_was_min_sizes = X_sizes.reshape(-1,1) >= X_sizes.reshape(1,-1)
+    if XX is None:
+        XX = dot(X.T, X)
+        
+    if issparse(XX):
+        # XX = as_dense_array(XX)
 
-    sub = XX == X_min_sizes
-    sub[X_was_min_sizes] = 0
-    return sub
+        assert isspmatrix_csr(XX)
+        raise Exception('To finish')
+#        XX.indices
+            
+        X_min_sizes = np.minimum(X_sizes.reshape(-1,1), X_sizes.reshape(1,-1))
+        X_was_min_sizes = X_sizes.reshape(-1,1) >= X_sizes.reshape(1,-1)
+
+        sub = XX == X_min_sizes
+        sub[X_was_min_sizes] = 0
+        return sub
+    else:
+        X_min_sizes = np.minimum(X_sizes.reshape(-1,1), X_sizes.reshape(1,-1))
+        X_was_min_sizes = X_sizes.reshape(-1,1) >= X_sizes.reshape(1,-1)
+
+        sub = XX == X_min_sizes
+        sub[X_was_min_sizes] = 0
+        return sub
+    
+def assert_unique_cliques(cliques):
+    if isinstance(cliques, csc_matrix):
+        tmp = csc_to_cliques_list(cliques)
+    else:
+        tmp = cliques
+    assert len(tmp)==len(set(tmp))
+
     

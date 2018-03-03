@@ -1,40 +1,22 @@
-import cPickle, time
-import argparse, os
-import pickle, datetime
-import gzip, subprocess
-import StringIO, random
-import sys, tempfile
-import shutil, multiprocessing
-import glob, sys
-from itertools import combinations, chain, groupby, compress, permutations, product
-import itertools
-from collections import Counter
+import time, os
+import sys
 
 import numpy as np
 import pandas as pd
+from numba import jit
 
-import igraph
 import scipy, scipy.sparse
 from scipy.sparse import isspmatrix_csc, isspmatrix_csr, issparse, isspmatrix, csc_matrix, csr_matrix, coo_matrix
-
-from ctypes import pointer, Structure, POINTER,c_void_p,c_int,c_char,c_double,byref,cdll, c_long, c_float, c_int64
-import ctypes
 
 import clixov_utils
 from clixov_utils import trim_cliques
 import clique_maximal
+import clique_maximum
 from clique_atomic import *
 from color import set_color, get_branch_sizes, get_branch_sizes_vw
 
-from numba import int64, float32, float64, boolean, guvectorize, jit, vectorize
-
 verbose = False
 
-@jit(nopython=True)
-def expand_2d_arr(arr):
-    arr2 = np.zeros((2*arr.shape[1], arr.shape[0]), arr.dtype).T
-    arr2[:,:arr.shape[1]] = arr
-    return arr2
 
 def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth=100000):
     if PX is None:
@@ -53,15 +35,15 @@ def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_
     PXbuf = np.zeros(k, np.bool_)
     PXbuf2 = np.ones(k, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
-    between_new = np.zeros(PX.size, np.bool_)
-    between_stack = np.arange(PX.size).astype(np.int32)
-    between_end = 0
+    btw_new = np.zeros(PX.size, np.bool_)
+    btw_stack = np.arange(PX.size).astype(np.int32)
+    btw_end = 0
     
-    cliques, cliques_indptr, cliques_n = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    cliques_indptr[:2] = 0
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0
    
-    Gnew_indices = np.empty(2 * Gnew.indices.size, np.int32)    
-    Gnew_indices[1::2] = 0
+    GI_new = np.empty(2 * Gnew.indices.size, np.int32)    
+    GI_new[1::2] = 0
     
     if degeneracy in ['min', 'max']:
         assert k == Gnew.shape[0]
@@ -73,65 +55,65 @@ def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_
             degen_order, degen_deg = get_degeneracy_min(Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices)
         degen_pos = np.empty(k, np.int32)
         degen_pos[degen_order] = np.arange(k).astype(np.int32)
-        Gnew_indices[::2] = degen_pos[Gnew.indices]
-        Gnew_start = 2 * Gnew.indptr[:-1][degen_order]
-        Gnew_end = 2 * Gnew.indptr[1:][degen_order]
+        GI_new[::2] = degen_pos[Gnew.indices]
+        GS_new = 2 * Gnew.indptr[:-1][degen_order]
+        GE_end = 2 * Gnew.indptr[1:][degen_order]
         
         Gold_indices = degen_pos[Gold.indices]
         Gold_start, Gold_end = Gold.indptr[:-1][degen_order], Gold.indptr[1:][degen_order]
     else:
-        Gnew_indices[::2] = Gnew.indices
-        Gnew_start = 2 * Gnew.indptr[:-1]
-        Gnew_end = 2 * Gnew.indptr[1:]        
+        GI_new[::2] = Gnew.indices
+        GS_new = 2 * Gnew.indptr[:-1]
+        GE_end = 2 * Gnew.indptr[1:]        
         Gold_start, Gold_end, Gold_indices = Gold.indptr[:-1], Gold.indptr[1:], Gold.indices
     
-    pot_indices = np.empty(3 * Gnew.indices.size, np.int32)
-    pot_indices[:] = 0
-    pot_start = Gnew_start.copy() * 3 / 2
-    pot_end = Gnew_start.copy() * 3 / 2
+    potI = np.empty(3 * Gnew.indices.size, np.int32)
+    potI[:] = 0
+    potS = GS_new.copy() * 3 / 2
+    potE = GS_new.copy() * 3 / 2
         
     pot_min = np.zeros(PX.size, np.int32)
     pot_min.fill(1000000)
     
-    min_cover, max_cover, min_cover_between = 0, 0, 0
+    min_cover, max_cover, min_cover_btw = 0, 0, 0
     
     max_possible = PX.size
     
-    tree_size = np.asfortranarray(np.zeros((22, 100000), np.int32))
-    tree_size.fill(-1)
-    tree_size[0, :2] = np.array([0,0])
+    tree = np.asfortranarray(np.zeros((22, 100000), np.int32))
+    tree.fill(-1)
+    tree[0, :2] = np.array([0,0])
     
-    cliques, cliques_indptr, cliques_n, max_cover, tree_size = BKPivotSparse2_Gnew_cover(
+    C, CP, CN, max_cover, tree = BKPivotSparse2_Gnew_cover(
         R, R_end, PX, PS, sep, XE, PS, XE, pos,
         Gold_start, Gold_end, Gold_indices,
-        Gnew_start, Gnew_end, Gnew_indices,
-        PXbuf2, 0, between_new, between_stack, between_end,
-        pot_indices, pot_start, pot_end, pot_min, max_possible,
-        min_cover, max_cover, min_cover_between, max_branch_depth,
-        cliques, cliques_indptr, cliques_n, tree_size)
+        GS_new, GE_end, GI_new,
+        PXbuf2, 0, btw_new, btw_stack, btw_end,
+        potI, potS, potE, pot_min, max_possible,
+        min_cover, max_cover, min_cover_btw, max_branch_depth,
+        C, CP, CN, tree)
 
-    cliques, cliques_indptr, cliques_n = trim_cliques(cliques, cliques_indptr, cliques_n)
+    C, CP, CN = trim_cliques(C, CP, CN)
     
     if degeneracy in ['min', 'max']:
-        cliques = degen_order[cliques]
+        C = degen_order[C]
         
-    tree_size = tree_size[:, : 4 + tree_size[0,0]]
+    tree = tree[:, : 4 + tree[0,0]]
 
-    return cliques, cliques_indptr, cliques_n, tree_size
+    return C, CP, CN, tree
 
 @jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                              G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
+                              GS, GE, GI, GS_new, GE_end, GI_new,
                               PXbuf, depth,
-                              pot_indices, pot_start, pot_end, pot_min, prev_max_possible,
-                              min_cover, max_cover, min_cover_between, max_branch_depth,
-                              cliques, cliques_indptr, cliques_n, tree_size):
+                              potI, potS, potE, pot_min, prev_max_possible,
+                              min_cover, max_cover, min_cover_btw, max_branch_depth,
+                              C, CP, CN, tree):
 
-    orig_size = 4 + tree_size[0, 0]
-    curr_tree_size = 4 + tree_size[0, 0]    
-    if tree_size.shape[1] <= curr_tree_size:
-        tree_size = expand_2d_arr(tree_size)    
-    tree_size[0, 0] += 1
+    orig_size = 4 + tree[0, 0]
+    curr_tree = 4 + tree[0, 0]    
+    if tree.shape[1] <= curr_tree:
+        tree = expand_2d_arr(tree)    
+    tree[0, 0] += 1
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
@@ -143,23 +125,23 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     #     print indent, 'PX:', PX
     #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
     #     print indent, 'R:', R, 'P:', P, 'X:', X
-    #     print indent, 'min_cover:', min_cover, 'min_cover_between:', min_cover_between, 'prev_max_possible:', prev_max_possible
-    #     print indent, 'pot_start/end/indices:', [(i,pot_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(pot_start, pot_end))]
-    #     print indent, 'Gold:', [(i, x, y, G_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(G_start, G_end))]
-    #     print indent, 'Gnew:', [(i, x, y, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]
+    #     print indent, 'min_cover:', min_cover, 'min_cover_btw:', min_cover_btw, 'prev_max_possible:', prev_max_possible
+    #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
+    #     print indent, 'Gold:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
+    #     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
         
     if P.size==0:
-        tree_size[0, 1] += 1
+        tree[0, 1] += 1
         if X.size==0:
-            tree_size[12, curr_tree_size] = 1
+            tree[12, curr_tree] = 1
             R_size = R.size
 
-            if verbose: print((1111111, R[0], curr_tree_size, depth, min_cover))
-            cliques, cliques_indptr, cliques_n = update_cliques2(cliques, cliques_indptr, cliques_n, R)            
-            return cliques, cliques_indptr, cliques_n, R.size, tree_size        
+            if verbose: print((1111111, R[0], curr_tree, depth, min_cover))
+            C, CP, CN = update_cliques2(C, CP, CN, R)            
+            return C, CP, CN, R.size, tree        
         else:
-            tree_size[12, curr_tree_size] = 2
-            return cliques, cliques_indptr, cliques_n, 0, tree_size
+            tree[12, curr_tree] = 2
+            return C, CP, CN, 0, tree
     
     default_max = 1000000
     max_possible = R.size + sep - PS
@@ -176,27 +158,27 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     P_degree_new = np.zeros(sep - PS, np.int32)
     for v_i in range(XE-1, PS-1, -1):
         v = PX[v_i]
-        v_degree, curr = move_PX(G_indices, G_start, G_end,
-                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])
+        v_degree, curr = move_PX(GI, GS, GE,
+                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
 
         # Move P and X to the bottom
-        v_degree_new, curr_new = 0, Gnew_start[v]
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        v_degree_new, curr_new = 0, GS_new[v]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if w_pos < oldPS or w_pos >= oldXE:
                 break
             elif PS <= w_pos and w_pos < XE:
                 v_degree_new += w_pos < sep
                 if v_i < sep and w_pos < sep:
-                    min_cover_within_P[v_i - PS] = min(min_cover_within_P[v_i - PS], Gnew_indices[w_i+1])
-                Gnew_indices[curr_new], Gnew_indices[w_i] = w, Gnew_indices[curr_new]
-                Gnew_indices[curr_new+1], Gnew_indices[w_i+1] = Gnew_indices[w_i+1], Gnew_indices[curr_new+1]
+                    min_cover_within_P[v_i - PS] = min(min_cover_within_P[v_i - PS], GI_new[w_i+1])
+                GI_new[curr_new], GI_new[w_i] = w, GI_new[curr_new]
+                GI_new[curr_new+1], GI_new[w_i+1] = GI_new[w_i+1], GI_new[curr_new+1]
                 curr_new += 2
 
             # Accounts for the case when curr_new was incremented
-            if (prev_max_possible >= Gnew_indices[w_i+1]) and (v_i < sep) and Gnew_indices[w_i] == prev_r:
-                pot_indices[pot_end[v]-1] = w_i + 1
+            if (prev_max_possible >= GI_new[w_i+1]) and (v_i < sep) and GI_new[w_i] == prev_r:
+                potI[potE[v]-1] = w_i + 1
                 
         v_degree += v_degree_new
         
@@ -208,8 +190,8 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             P_degree[v_i - PS] = v_degree
             P_degree_new[v_i - PS] = v_degree_new
     
-    if min(prev_max_possible, R.size + 1 + P_degree.max()) < min(min_cover, min_cover_between, min_cover_within):
-        return cliques, cliques_indptr, cliques_n, 0, tree_size    
+    if min(prev_max_possible, R.size + 1 + P_degree.max()) < min(min_cover, min_cover_btw, min_cover_within):
+        return C, CP, CN, 0, tree    
     
     branches = P.copy()
 
@@ -220,29 +202,29 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     max_colors = 0   
     
     for v_i in np.argsort(-1 * P_degree):
-        max_colors = set_color(Gnew_indices, Gnew_start, Gnew_end,
-                               G_indices, G_start, G_end,
+        max_colors = set_color(GI_new, GS_new, GE_end,
+                               GI, GS, GE,
                                pos, P, sep, PS, XE, v_i, colors, nei_bool, nei_list, max_colors)    
         
     max_possible = R.size + max_colors    
-    if max_possible < min(min_cover, min_cover_within, min_cover_between):
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+    if max_possible < min(min_cover, min_cover_within, min_cover_btw):
+        return C, CP, CN, 0, tree
     
     # Get bound based on X
-    tmp_sizes = get_branch_sizes(Gnew_indices, Gnew_start, Gnew_end,
-                                 G_indices, G_start, G_end,
+    tmp_sizes = get_branch_sizes(GI_new, GS_new, GE_end,
+                                 GI, GS, GE,
                                  pos, sep, PS, XE, colors, nei_bool, nei_list, P)
     tmp_sizes_argsort = np.argsort(-1 * tmp_sizes)    
     best = 10000
     for v in PX[sep:XE]:
         X_keep = np.ones(sep - PS, np.bool_)
-        for w in G_indices[G_start[v] : G_end[v]]:
+        for w in GI[GS[v] : GE[v]]:
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
             elif w_pos < sep:
                 X_keep[w_pos - PS] = False
-        for w in Gnew_indices[Gnew_start[v] : Gnew_end[v] : 2]:
+        for w in GI_new[GS_new[v] : GE_end[v] : 2]:
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
@@ -253,18 +235,18 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 best = min(best, tmp_sizes[w_i])
                 break
 
-    if R.size + 1 + best < min(min_cover, min_cover_within, min_cover_between):
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+    if R.size + 1 + best < min(min_cover, min_cover_within, min_cover_btw):
+        return C, CP, CN, 0, tree
     
     see_purpose = (min_cover > R.size + 1 + tmp_sizes.max()) and (max_degree < P.size)
     if see_purpose:
         within_purpose = (R.size + 1 + tmp_sizes) >= min_cover_within_P
-        between_purpose = np.zeros(P.size, np.bool_)
-        tmp_between_purpose = (pot_end[P] > pot_start[P]).nonzero()[0]
-        between_purpose[tmp_between_purpose[pot_indices[pot_end[P[tmp_between_purpose]] - 2] <= (R.size + 1 + tmp_sizes[tmp_between_purpose])]] = True
-        P_purpose = within_purpose | between_purpose
+        btw_purpose = np.zeros(P.size, np.bool_)
+        tmp_btw_purpose = (potE[P] > potS[P]).nonzero()[0]
+        btw_purpose[tmp_btw_purpose[potI[potE[P[tmp_btw_purpose]] - 2] <= (R.size + 1 + tmp_sizes[tmp_btw_purpose])]] = True
+        P_purpose = within_purpose | btw_purpose
         if not np.any(P_purpose):
-            return cliques, cliques_indptr, cliques_n, 0, tree_size
+            return C, CP, CN, 0, tree
         
         branches = P[P_purpose]
         branches_degree = P_degree[P_purpose]
@@ -274,14 +256,14 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'branches:', branches
 #     print indent, 'colors:', colors[pos[branches] - PS]
 #     print indent, 'branches_sizes:', branches_sizes
-#     print indent, 'min(min_cover, min_cover_within, min_cover_between):', min(min_cover, min_cover_within, min_cover_between)
+#     print indent, 'min(min_cover, min_cover_within, min_cover_btw):', min(min_cover, min_cover_within, min_cover_btw)
 #     print indent, 'pivot u:', u
 #     print indent, 'Padj_u:', Padj_u
 #     print indent, 'branches:', branches
     
     # Initialize max_cover
     max_cover = 0
-    init_cliques_n = cliques_n
+    init_CN = CN
 
     used = np.empty(branches.size, np.int32)
     used_count = 0
@@ -298,50 +280,50 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         v = branches[v_i]
     
         min_newly_capt = 1000000
-        sub_min_cover_between = 1000000
+        sub_min_cover_btw = 1000000
         new_PS, new_XE = sep, sep
         
-        tmp = get_branch_sizes_vw(Gnew_indices, Gnew_start, Gnew_end,
-                                  G_indices, G_start, G_end,
+        tmp = get_branch_sizes_vw(GI_new, GS_new, GE_end,
+                                  GI, GS, GE,
                                   pos, sep, PS, XE, colors_v, nei_bool, nei_list, v)
         sub_max_possible = R.size + 1 + tmp
-        if sub_max_possible >= min(min_cover, min_cover_within, min_cover_between):
+        if sub_max_possible >= min(min_cover, min_cover_within, min_cover_btw):
             used[used_count] = v
             used_count += 1
         else:
             continue
             
-        for w_i in range(G_start[v], G_end[v]):
-            w = G_indices[w_i]
+        for w_i in range(GS[v], GE[v]):
+            w = GI[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)
                 
-                if pot_end[w] > pot_start[w]:
-                    sub_min_cover_between = min(sub_min_cover_between, pot_indices[pot_end[w]-2])
+                if potE[w] > potS[w]:
+                    sub_min_cover_btw = min(sub_min_cover_btw, potI[potE[w]-2])
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
                 new_XE += 1
             else:
                 break
                 
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)
-                if sub_max_possible >= Gnew_indices[w_i+1]:
-                    pot_indices[pot_end[w]] = Gnew_indices[w_i+1]
-                    if pot_end[w] > pot_start[w]:
-                        pot_indices[pot_end[w]+1] = min(pot_indices[pot_end[w]-2], Gnew_indices[w_i+1])
+                if sub_max_possible >= GI_new[w_i+1]:
+                    potI[potE[w]] = GI_new[w_i+1]
+                    if potE[w] > potS[w]:
+                        potI[potE[w]+1] = min(potI[potE[w]-2], GI_new[w_i+1])
                     else:
-                        pot_indices[pot_end[w]+1] = Gnew_indices[w_i+1]
-                    pot_end[w] += 3
+                        potI[potE[w]+1] = GI_new[w_i+1]
+                    potE[w] += 3
                 
-                if pot_end[w] > pot_start[w]:
-                    sub_min_cover_between = min(sub_min_cover_between, pot_indices[pot_end[w]-2])
+                if potE[w] > potS[w]:
+                    sub_min_cover_btw = min(sub_min_cover_btw, potI[potE[w]-2])
     
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
@@ -349,35 +331,35 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             elif w_pos < PS or w_pos >= XE:
                 break
   
-        newly_capt = pot_indices[pot_start[v] : pot_end[v]]
+        newly_capt = potI[potS[v] : potE[v]]
         if newly_capt.size > 0:
             min_newly_capt = newly_capt[newly_capt.size - 2]        
 
         # Not necessarily true as branches are moved to X
         if sep - new_PS == 0:
-            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, sub_min_cover_between)
+            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, sub_min_cover_btw)
         else:
-            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, min_cover_within, sub_min_cover_between)
+            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, min_cover_within, sub_min_cover_btw)
         
         if do_subbranch:
-            sub_tree_size = 4 + tree_size[0,0]
-            if tree_size.shape[1] <= sub_tree_size:
-                tree_size = expand_2d_arr(tree_size)
+            sub_tree = 4 + tree[0,0]
+            if tree.shape[1] <= sub_tree:
+                tree = expand_2d_arr(tree)
 
         if do_subbranch:
             R_buff[R_end] = v
             sub_min_cover = min(min_cover, min_newly_capt)
 
-            prev_cliques_n = cliques_n
+            prev_CN = CN
             
-            cliques, cliques_indptr, cliques_n, sub_max_cover, tree_size = BKPivotSparse2_Gsep_cover(
+            C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gsep_cover(
                 R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                G_start, G_end, G_indices,
-                Gnew_start, Gnew_end, Gnew_indices,
+                GS, GE, GI,
+                GS_new, GE_end, GI_new,
                 PXbuf, depth+1,
-                pot_indices, pot_start, pot_end, pot_min, sub_max_possible,
-                sub_min_cover, max_cover, sub_min_cover_between, max_branch_depth,
-                cliques, cliques_indptr, cliques_n, tree_size)
+                potI, potS, potE, pot_min, sub_max_possible,
+                sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
+                C, CP, CN, tree)
                 
             # Update min_cover, max_cover
             max_cover = max(max_cover, sub_max_cover)
@@ -389,17 +371,17 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                     newly_capt[w_i+1] = max(newly_capt[w_i+1], sub_max_cover)
 
         # Restore pot[w] for all new neighbors of v
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
-                if sub_max_possible >= Gnew_indices[w_i+1]:
+                if sub_max_possible >= GI_new[w_i+1]:
                     if do_subbranch:
-#                         assert Gnew_indices[w_i+1] == Gnew_indices[pot_indices[pot_end[w]-1]]
-                        Gnew_indices[w_i+1] = max(Gnew_indices[w_i+1], pot_indices[pot_end[w]-3])
-                        Gnew_indices[pot_indices[pot_end[w]-1]] = max(Gnew_indices[pot_indices[pot_end[w]-1]], pot_indices[pot_end[w]-3])
+#                         assert GI_new[w_i+1] == GI_new[potI[potE[w]-1]]
+                        GI_new[w_i+1] = max(GI_new[w_i+1], potI[potE[w]-3])
+                        GI_new[potI[potE[w]-1]] = max(GI_new[potI[potE[w]-1]], potI[potE[w]-3])
             
-                    pot_end[w] -= 3
+                    potE[w] -= 3
             elif w_pos < PS or w_pos >= XE:
                 break
 
@@ -409,13 +391,13 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             for x_i in range(sep-1, PS-1, -1):
                 x = PX[x_i]
                 # Move P and X to the bottom
-                for w_i in range(Gnew_start[x], Gnew_end[x], 2):
-                    w = Gnew_indices[w_i]
+                for w_i in range(GS_new[x], GE_end[x], 2):
+                    w = GI_new[w_i]
                     w_pos = pos[w]
                     if w_pos < PS or w_pos >= XE:
                         break
                     elif PS <= w_pos and w_pos < sep:
-                        min_cover_within = min(min_cover_within, Gnew_indices[w_i+1])
+                        min_cover_within = min(min_cover_within, GI_new[w_i+1])
     
         # Swap v to the end of P, and then decrement separator
         sep -= 1
@@ -433,35 +415,35 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'Returning::::'
 #     print indent, 'R:', R, 'P:', P, 'X:', X
 #     print indent, 'min/max_cover:', min_cover, max_cover
-#     print indent, 'pot_start/end/indices:', [(i,pot_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(pot_start, pot_end))]
-#     print indent, 'Gnew:', [(i, x, y, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]  
-#     assert np.all(pot_end >= pot_start)
+#     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
+#     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]  
+#     assert np.all(potE >= potS)
 
-    return cliques, cliques_indptr, cliques_n, max_cover, tree_size
+    return C, CP, CN, max_cover, tree
 
 @jit(nopython=True, cache=cache)
 def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                              G_start, G_end, G_indices, Gnew_start, Gnew_end, Gnew_indices,
+                              GS, GE, GI, GS_new, GE_end, GI_new,
                               PXbuf, depth,
-                              between_new, between_stack, between_end,
-                              pot_indices, pot_start, pot_end, pot_min, prev_max_possible,
-                              min_cover, max_cover, min_cover_between, max_branch_depth,
-                              cliques, cliques_indptr, cliques_n, tree_size):
+                              btw_new, btw_stack, btw_end,
+                              potI, potS, potE, pot_min, prev_max_possible,
+                              min_cover, max_cover, min_cover_btw, max_branch_depth,
+                              C, CP, CN, tree):
     """
-    between_new[v]: Is there a new edge crossing between R and node v in P?
+    btw_new[v]: Is there a new edge crossing btw R and node v in P?
     """
-    curr_tree_size = 4 + tree_size[0, 0]
-    if tree_size.shape[1] <= curr_tree_size:
-        tree_size = expand_2d_arr(tree_size)    
-    tree_size[10, curr_tree_size] = 1
-    tree_size[0, curr_tree_size] = depth
-    tree_size[0, 0] += 1
+    curr_tree = 4 + tree[0, 0]
+    if tree.shape[1] <= curr_tree:
+        tree = expand_2d_arr(tree)    
+    tree[10, curr_tree] = 1
+    tree[0, curr_tree] = depth
+    tree[0, 0] += 1
     
-    if verbose and (curr_tree_size % 25000) == 0:
-        print((3333333, curr_tree_size))
+    if verbose and (curr_tree % 25000) == 0:
+        print((3333333, curr_tree))
     
-    if curr_tree_size >= 90000:
-        return cliques, cliques_indptr, cliques_n, max_cover, tree_size
+    if curr_tree >= 90000:
+        return C, CP, CN, max_cover, tree
     
     R = R_buff[:R_end]
     P, X = PX[PS:sep], PX[sep:XE]
@@ -475,17 +457,17 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     #     print indent, 'PX:', PX
     #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
     #     print indent, 'R:', R, 'P:', P, 'X:', X
-    #     print indent, 'min_cover:', min_cover, 'min_cover_between:', min_cover_between, 'prev_max_possible:', prev_max_possible
-    #     print indent, 'between_new:', between_new.astype(np.int32)
+    #     print indent, 'min_cover:', min_cover, 'min_cover_btw:', min_cover_btw, 'prev_max_possible:', prev_max_possible
+    #     print indent, 'btw_new:', btw_new.astype(np.int32)
     #     print indent, 'pot_min:', pot_min
-    #     print indent, 'pot_start/end/indices:', [(i,pot_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(pot_start, pot_end))]
-    #     print indent, 'Gold:', [(i, x, y, G_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(G_start, G_end))]
-    #     print indent, 'Gnew:', [(i, x, y, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]
+    #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
+    #     print indent, 'Gold:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
+    #     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
     
     if P.size==0:
-        tree_size[12, curr_tree_size] = 2
-        tree_size[0, 1] += 1
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+        tree[12, curr_tree] = 2
+        tree[0, 1] += 1
+        return C, CP, CN, 0, tree
 
     incd = np.empty(sep - PS, np.int32)
     incd_degree = np.empty(sep - PS, np.int32)
@@ -513,32 +495,32 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         min_cover_within_v = default_max
         
         # Move P and X to the bottom
-        v_degree_new, curr_new = 0, Gnew_start[v]
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        v_degree_new, curr_new = 0, GS_new[v]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if w_pos < oldPS or w_pos >= oldXE:
                 break
             elif PS <= w_pos and w_pos < XE:
                 v_degree_new += w_pos < sep
                 if inP and w_pos < sep:
-                    min_cover_within_v = min(min_cover_within_v, Gnew_indices[w_i+1])
-                Gnew_indices[curr_new], Gnew_indices[w_i] = w, Gnew_indices[curr_new]
-                Gnew_indices[curr_new+1], Gnew_indices[w_i+1] = Gnew_indices[w_i+1], Gnew_indices[curr_new+1]
+                    min_cover_within_v = min(min_cover_within_v, GI_new[w_i+1])
+                GI_new[curr_new], GI_new[w_i] = w, GI_new[curr_new]
+                GI_new[curr_new+1], GI_new[w_i+1] = GI_new[w_i+1], GI_new[curr_new+1]
                 curr_new += 2
             
-            if inP and (prev_max_possible >= Gnew_indices[w_i+1]) and Gnew_indices[w_i] == prev_r:
-                pot_indices[pot_end[v]-1] = w_i + 1
+            if inP and (prev_max_possible >= GI_new[w_i+1]) and GI_new[w_i] == prev_r:
+                potI[potE[v]-1] = w_i + 1
                 
         if v_degree_new > max_degree:
             max_degree = v_degree_new
             u, u_curr_new, u_incd = v, curr_new, incd_count
         if (not inP) and v_degree_new > 0:
-            tmp, curr = move_PX(G_indices, G_start, G_end,
-                                pos, oldPS, oldXE, PS, XE, sep, 0, v, G_start[v])
+            tmp, curr = move_PX(GI, GS, GE,
+                                pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
             X_incd[X_incd_count] = v
             X_incd_count += 1
-        if inP and (v_degree_new > 0 or between_new[v]):
+        if inP and (v_degree_new > 0 or btw_new[v]):
             incd[incd_count] = v
             incd_degree[incd_count] = v_degree_new            
             min_cover_within_incd[incd_count] = min_cover_within_v            
@@ -548,15 +530,15 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             P_degree[v_i - PS] += v_degree_new
             P_degree_new[v_i - PS] += v_degree_new
             min_cover_within = min(min_cover_within, min_cover_within_v)            
-    u_curr = G_end[u]
+    u_curr = GE[u]
     
-    if min(prev_max_possible, R.size + (sep - PS)) < min(min_cover, min_cover_between, min_cover_within):
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+    if min(prev_max_possible, R.size + (sep - PS)) < min(min_cover, min_cover_btw, min_cover_within):
+        return C, CP, CN, 0, tree
     
     if incd_count == 0:
-        tree_size[12, curr_tree_size] = 4
-        tree_size[0, 1] += 1
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+        tree[12, curr_tree] = 4
+        tree[0, 1] += 1
+        return C, CP, CN, 0, tree
     incd = incd[:incd_count]
     min_cover_within_incd = min_cover_within_incd[:incd_count]
     incd_degree = incd_degree[:incd_count]
@@ -568,18 +550,18 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     new_incd_end = 0
     
     for v in incd:
-        curr = G_start[v]
+        curr = GS[v]
         v_degree_old = 0
         
         # Move P and X to the bottom
-        for w_i in range(G_start[v], G_end[v]):
-            w = G_indices[w_i]
+        for w_i in range(GS[v], GE[v]):
+            w = GI[w_i]
             w_pos = pos[w]
             if w_pos < oldPS or w_pos >= oldXE:
                 break
             elif PS <= w_pos and w_pos < XE:
                 v_degree_old += w_pos < sep
-                G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+                GI[curr], GI[w_i] = w, GI[curr]
                 curr += 1
                 
                 if PXbuf[w]:
@@ -596,17 +578,17 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     PXbuf[incd] = False
     PXbuf[new_incd] = False
     for v in new_incd:
-        curr = G_start[v]
+        curr = GS[v]
         v_degree = 0
-        for w_i in range(G_start[v], G_end[v]):
-            w = G_indices[w_i]
+        for w_i in range(GS[v], GE[v]):
+            w = GI[w_i]
             w_pos = pos[w]
             if w_pos < oldPS or w_pos >= oldXE:
                 break
             elif PS <= w_pos and w_pos < XE:
                 ## Counts only those neighbors that are in P and in (incd, new_incd)
                 v_degree += (w_pos < sep) and not PXbuf[w]
-                G_indices[curr], G_indices[w_i] = w, G_indices[curr]
+                GI[curr], GI[w_i] = w, GI[curr]
                 curr += 1
         if pos[v] < sep:
             P_degree[pos[v] - PS] += v_degree
@@ -628,12 +610,12 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     for v_i in range(sep, PS):
         v = PX[v_i]
         v_degree = 0
-        for w in Gnew_indices[Gnew_start[v] : Gnew_end[v] : 2]:
+        for w in GI_new[GS_new[v] : GE_end[v] : 2]:
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
             v_degree += (w_pos < sep) and (not PXbuf[w])
-        for w in G_indices[G_start[v] : G_end[v]]:
+        for w in GI[GS[v] : GE[v]]:
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
@@ -642,47 +624,47 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 
     for v_i in np.argsort(-1 * P_degree):
         if not PXbuf[P[v_i]]:
-            max_colors = set_color(Gnew_indices, Gnew_start, Gnew_end, G_indices, G_start, G_end,
+            max_colors = set_color(GI_new, GS_new, GE_end, GI, GS, GE,
                                    pos, P, sep, PS, XE, v_i, colors, nei_bool, nei_list, max_colors)
     PXbuf[incd] = True
     PXbuf[new_incd] = True
         
     max_possible = R.size + max_colors
-    if max_possible < min(min_cover, min_cover_within, min_cover_between):
-        tree_size[12, curr_tree_size] = 5
-        tree_size[0, 1] += 1
-        return cliques, cliques_indptr, cliques_n, 0, tree_size
+    if max_possible < min(min_cover, min_cover_within, min_cover_btw):
+        tree[12, curr_tree] = 5
+        tree[0, 1] += 1
+        return C, CP, CN, 0, tree
         
-    tmp_sizes = get_branch_sizes(Gnew_indices, Gnew_start, Gnew_end, G_indices, G_start, G_end, pos, sep, PS, XE, colors, nei_bool, nei_list, incd)
+    tmp_sizes = get_branch_sizes(GI_new, GS_new, GE_end, GI, GS, GE, pos, sep, PS, XE, colors, nei_bool, nei_list, incd)
     see_purpose = (min_cover > R.size + 1 + tmp_sizes.max()) and (max_degree < P.size)
     if see_purpose:
         within_purpose = (R.size + 1 + tmp_sizes) >= min_cover_within_incd
-        between_purpose = np.zeros(incd.size, np.bool_)
-        tmp_between_purpose = (pot_end[incd] > pot_start[incd]).nonzero()[0]
-        between_purpose[tmp_between_purpose[pot_indices[pot_end[incd[tmp_between_purpose]] - 2] <= (R.size + 1 + tmp_sizes[tmp_between_purpose])]] = True
-        branches_purpose = within_purpose | between_purpose
+        btw_purpose = np.zeros(incd.size, np.bool_)
+        tmp_btw_purpose = (potE[incd] > potS[incd]).nonzero()[0]
+        btw_purpose[tmp_btw_purpose[potI[potE[incd[tmp_btw_purpose]] - 2] <= (R.size + 1 + tmp_sizes[tmp_btw_purpose])]] = True
+        branches_purpose = within_purpose | btw_purpose
         if not np.any(branches_purpose):
-            tree_size[12, curr_tree_size] = 8
-            tree_size[0, 1] += 1
-            return cliques, cliques_indptr, cliques_n, 0, tree_size
+            tree[12, curr_tree] = 8
+            tree[0, 1] += 1
+            return C, CP, CN, 0, tree
     else:
         branches_purpose = np.zeros(incd.size, np.bool_)
         
     ## Get branches
-    Padj_u = G_indices[G_start[u] : u_curr]
-    Padj_new_u = Gnew_indices[Gnew_start[u] : u_curr_new : 2]        
+    Padj_u = GI[GS[u] : u_curr]
+    Padj_new_u = GI_new[GS_new[u] : u_curr_new : 2]        
     PXbuf[Padj_u] = False
     PXbuf[Padj_new_u] = False
     
-    ### Consideration: maybe between_new[P] should only be included if the pivot is in P?    
-    # Always keep the between_new
-    PXbuf[P[between_new[P]]] = True
+    ### Consideration: maybe btw_new[P] should only be included if the pivot is in P?    
+    # Always keep the btw_new
+    PXbuf[P[btw_new[P]]] = True
     
     # Ensure that for any node left out of P, all of its Gnew neighbors in P are included
     for v in incd[~ PXbuf[incd]]:
         if not PXbuf[v]:
             # By construction, this will only iterate over w's that are in incd
-            for w in Gnew_indices[Gnew_start[v] : Gnew_end[v]: 2]:
+            for w in GI_new[GS_new[v] : GE_end[v]: 2]:
                 w_pos = pos[w]
                 PXbuf[w] = True
                 if w_pos < PS or w_pos >= XE:
@@ -704,7 +686,7 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         v = branches[v_i]
         v_color = colors[pos[v] - PS]
         distinct_count = 0
-        for w in G_indices[G_start[v] : G_end[v]]:
+        for w in GI[GS[v] : GE[v]]:
             w_pos = pos[w]
             if PS <= w_pos and w_pos < sep and incd_bool[w] and (not PXbuf[w]) and colors[w_pos - PS] > v_color:
                 w_col = colors[w_pos - PS]
@@ -714,7 +696,7 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                     distinct_count += 1
             elif PS > w_pos or w_pos >= XE:
                 break
-        for w in Gnew_indices[Gnew_start[v] : Gnew_end[v] : 2]:
+        for w in GI_new[GS_new[v] : GE_end[v] : 2]:
             w_pos = pos[w]
             if PS <= w_pos and w_pos < sep and incd_bool[w] and (not PXbuf[w]) and colors[w_pos - PS] > v_color:
                 w_col = colors[w_pos - PS]
@@ -731,13 +713,13 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     PXbuf[Padj_u] = True
 
     #####
-    ## Strongly prioritize branching off between_new first
+    ## Strongly prioritize branching off btw_new first
 #     branches_order = np.argsort(-1 * (branches + (1000000 * branches_sizes)))
     branches_order = np.argsort(-1 * (branches_sizes + (1000000 * extra_priority)))
     branches = branches[branches_order]
     branches_sizes = branches_sizes[branches_order]
     
-#     print indent, 'Gnew:', [(i, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]    
+#     print indent, 'Gnew:', [(i, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]    
 #     print indent, 'min_cover_within:', min_cover_within    
 #     print indent, 'incd:', incd[:incd_count]
 #     print indent, 'pivot u:', u
@@ -749,9 +731,9 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         
     # Initialize max_cover
     max_cover = 0
-    init_cliques_n = cliques_n
+    init_CN = CN
     
-    last_tree_size = tree_size[0,0]
+    last_tree = tree[0,0]
     
     used = np.empty(branches.size, np.int32)
     used_count = 0
@@ -759,7 +741,7 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     colors_v = np.empty(PX.size, np.int32)
     colors_v[P] = colors    
     
-    tree_size[15, curr_tree_size] = 0
+    tree[15, curr_tree] = 0
     
     v_i = -1
     check_swap = depth == 0
@@ -786,11 +768,11 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 v = branches[v_i]
                 
                 found = False
-                for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-                    w = Gnew_indices[w_i]
+                for w_i in range(GS_new[v], GE_end[v], 2):
+                    w = GI_new[w_i]
                     w_pos = pos[w]
                     if (PS <= w_pos) and (w_pos < sep):
-                        if Gnew_indices[w_i+1]==0:
+                        if GI_new[w_i+1]==0:
                             found = True
                             break
                     elif w_pos < PS or w_pos >= XE:
@@ -812,66 +794,66 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #         print indent, 'branching at:', v
 #         print indent, 'pot_min:', pot_min
 #         print indent, 'min/max_cover:', min_cover, max_cover        
-#         print indent, 'pot_start/end/indices:', [(i,pot_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(pot_start, pot_end))]
-#         print indent, 'pot_start/end:', zip(pot_start, pot_end)
-#         print indent, 'Gnew:', [(i, x, y, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]
-#         print indent, 'sub_max_possible:', sub_max_possible, 'min(min_cover, min_cover_within, min_cover_between):', min(min_cover, min_cover_within, min_cover_between)
+#         print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
+#         print indent, 'potS/end:', zip(potS, potE)
+#         print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
+#         print indent, 'sub_max_possible:', sub_max_possible, 'min(min_cover, min_cover_within, min_cover_btw):', min(min_cover, min_cover_within, min_cover_btw)
 #         sub_max_possible = R.size + 1 + branches_sizes[v_i]
 
-        tmp = get_branch_sizes_vw(Gnew_indices, Gnew_start, Gnew_end,
-                                  G_indices, G_start, G_end,
+        tmp = get_branch_sizes_vw(GI_new, GS_new, GE_end,
+                                  GI, GS, GE,
                                   pos, sep, PS, XE, colors_v, nei_bool, nei_list, v)
         sub_max_possible = R.size + 1 + tmp
 
-        if sub_max_possible >= min(min_cover, min_cover_within, min_cover_between):
+        if sub_max_possible >= min(min_cover, min_cover_within, min_cover_btw):
             used[used_count] = v
             used_count += 1
         else:
             continue
             
         min_newly_capt = 1000000
-        sub_min_cover_between = 1000000
+        sub_min_cover_btw = 1000000
         sub_min_cover_within = 1000000
-        between_added = 0
+        btw_added = 0
         new_PS, new_XE = sep, sep
         
-        sub_tree_size = 4 + tree_size[0,0]
+        sub_tree = 4 + tree[0,0]
     
-        for w_i in range(G_start[v], G_end[v]):            
-            w = G_indices[w_i]
+        for w_i in range(GS[v], GE[v]):            
+            w = GI[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)
         
-                if pot_end[w] > pot_start[w]:
-                    sub_min_cover_between = min(sub_min_cover_between, pot_indices[pot_end[w]-2])                
+                if potE[w] > potS[w]:
+                    sub_min_cover_btw = min(sub_min_cover_btw, potI[potE[w]-2])                
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
                 new_XE += 1
             elif w_pos < PS or w_pos >= XE:
                 break
         
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
                 new_PS -= 1
                 swap_pos(PX, pos, w, new_PS)               
-                if not between_new[w]:
-                    between_stack[between_end + between_added] = w
-                    between_added += 1
-                    between_new[w] = True
+                if not btw_new[w]:
+                    btw_stack[btw_end + btw_added] = w
+                    btw_added += 1
+                    btw_new[w] = True
 
-                if sub_max_possible >= Gnew_indices[w_i+1]:
-                    pot_indices[pot_end[w]] = Gnew_indices[w_i+1]
-                    if pot_end[w] > pot_start[w]:
-                        pot_indices[pot_end[w]+1] = min(pot_indices[pot_end[w]-2], Gnew_indices[w_i+1])
+                if sub_max_possible >= GI_new[w_i+1]:
+                    potI[potE[w]] = GI_new[w_i+1]
+                    if potE[w] > potS[w]:
+                        potI[potE[w]+1] = min(potI[potE[w]-2], GI_new[w_i+1])
                     else:
-                        pot_indices[pot_end[w]+1] = Gnew_indices[w_i+1]
-                    pot_end[w] += 3
-                if pot_end[w] > pot_start[w]:
-                    sub_min_cover_between = min(sub_min_cover_between, pot_indices[pot_end[w]-2])
+                        potI[potE[w]+1] = GI_new[w_i+1]
+                    potE[w] += 3
+                if potE[w] > potS[w]:
+                    sub_min_cover_btw = min(sub_min_cover_btw, potI[potE[w]-2])
             elif (sep <= w_pos) and (w_pos < XE):
                 swap_pos(PX, pos, w, new_XE)
                 new_XE += 1
@@ -879,47 +861,47 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 break
         
         # Update min cover based on r4: r1,r2,r3
-        newly_capt = pot_indices[pot_start[v] : pot_end[v]]
+        newly_capt = potI[potS[v] : potE[v]]
         if newly_capt.size > 0:
             min_newly_capt = newly_capt[newly_capt.size - 2]
         
         ## Don't need to apply this criterion yet (since Gnew assumes no new edge yet)
         ## However, if you do, then do it on a min_below computes by PX-by-PX looping above
         if sep - new_PS == 0:
-            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, sub_min_cover_between)
+            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, sub_min_cover_btw)
         else:
-            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, min_cover_within, sub_min_cover_between)
+            do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, min_cover_within, sub_min_cover_btw)
         
         if do_subbranch:
-            sub_tree_size = 4 + tree_size[0, 0]
-            if tree_size.shape[1] <= sub_tree_size:
-                tree_size = expand_2d_arr(tree_size)
+            sub_tree = 4 + tree[0, 0]
+            if tree.shape[1] <= sub_tree:
+                tree = expand_2d_arr(tree)
 
         if do_subbranch:
             R_buff[R_end] = v
             sub_min_cover = min(min_cover, min_newly_capt)
             
-            prev_cliques_n = cliques_n
+            prev_CN = CN
             
-            if between_new[v]:
-                cliques, cliques_indptr, cliques_n, sub_max_cover, tree_size = BKPivotSparse2_Gsep_cover(
+            if btw_new[v]:
+                C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gsep_cover(
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                    G_start, G_end, G_indices,
-                    Gnew_start, Gnew_end, Gnew_indices,
+                    GS, GE, GI,
+                    GS_new, GE_end, GI_new,
                     PXbuf, depth+1,
-                    pot_indices, pot_start, pot_end, pot_min, sub_max_possible,
-                    sub_min_cover, max_cover, sub_min_cover_between, max_branch_depth,
-                    cliques, cliques_indptr, cliques_n, tree_size)
+                    potI, potS, potE, pot_min, sub_max_possible,
+                    sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
+                    C, CP, CN, tree)
             else:
-                cliques, cliques_indptr, cliques_n, sub_max_cover, tree_size = BKPivotSparse2_Gnew_cover(
+                C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gnew_cover(
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
-                    G_start, G_end, G_indices,
-                    Gnew_start, Gnew_end, Gnew_indices,
+                    GS, GE, GI,
+                    GS_new, GE_end, GI_new,
                     PXbuf, depth+1,
-                    between_new, between_stack, between_end + between_added,
-                    pot_indices, pot_start, pot_end, pot_min, sub_max_possible,
-                    sub_min_cover, max_cover, sub_min_cover_between, max_branch_depth,
-                    cliques, cliques_indptr, cliques_n, tree_size)
+                    btw_new, btw_stack, btw_end + btw_added,
+                    potI, potS, potE, pot_min, sub_max_possible,
+                    sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
+                    C, CP, CN, tree)
 
             # Update min_cover, max_cover
             max_cover = max(max_cover, sub_max_cover)
@@ -933,16 +915,16 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                     newly_capt[w_i+1] = max(newly_capt[w_i+1], sub_max_cover)
 
         # Restore pot[w] for all new neighbors of v
-        for w_i in range(Gnew_start[v], Gnew_end[v], 2):
-            w = Gnew_indices[w_i]
+        for w_i in range(GS_new[v], GE_end[v], 2):
+            w = GI_new[w_i]
             w_pos = pos[w]
             if (PS <= w_pos) and (w_pos < sep):
-                if sub_max_possible >= Gnew_indices[w_i+1]:
+                if sub_max_possible >= GI_new[w_i+1]:
                     if do_subbranch:
-#                         assert Gnew_indices[w_i+1] == Gnew_indices[pot_indices[pot_end[w]-1]]
-                        Gnew_indices[w_i+1] = max(Gnew_indices[w_i+1], pot_indices[pot_end[w]-3])
-                        Gnew_indices[pot_indices[pot_end[w]-1]] = max(Gnew_indices[pot_indices[pot_end[w]-1]], pot_indices[pot_end[w]-3])                
-                    pot_end[w] -= 3
+#                         assert GI_new[w_i+1] == GI_new[potI[potE[w]-1]]
+                        GI_new[w_i+1] = max(GI_new[w_i+1], potI[potE[w]-3])
+                        GI_new[potI[potE[w]-1]] = max(GI_new[potI[potE[w]-1]], potI[potE[w]-3])                
+                    potE[w] -= 3
             elif w_pos < PS or w_pos >= XE:
                 break
         
@@ -952,24 +934,24 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             for x_i in range(sep-1, PS-1, -1):
                 x = PX[x_i]
                 # Move P and X to the bottom
-                for w_i in range(Gnew_start[x], Gnew_end[x], 2):
-                    w = Gnew_indices[w_i]
+                for w_i in range(GS_new[x], GE_end[x], 2):
+                    w = GI_new[w_i]
                     w_pos = pos[w]
                     if w_pos < PS or w_pos >= XE:
                         break
                     elif PS <= w_pos and w_pos < sep:
-                        min_cover_within = min(min_cover_within, Gnew_indices[w_i+1])
+                        min_cover_within = min(min_cover_within, GI_new[w_i+1])
         
-        # Reset the between_new
-        between_new[between_stack[between_end : between_end + between_added]] = False
+        # Reset the btw_new
+        btw_new[btw_stack[btw_end : btw_end + btw_added]] = False
 
         # Swap v to the end of P, and then decrement separator
         sep -= 1
         swap_pos(PX, pos, v, sep)
         
         if depth==0:
-            if verbose: print((v, sub_max_possible, sub_max_cover, do_subbranch, last_tree_size - tree_size[0,0]))
-            last_tree_size = tree_size[0,0]
+            if verbose: print((v, sub_max_possible, sub_max_cover, do_subbranch, last_tree - tree[0,0]))
+            last_tree = tree[0,0]
             
         # Don't branch anymore after this
         if depth > max_branch_depth and used_count==1:
@@ -984,15 +966,13 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'R:', R, 'P:', P, 'X:', X
 #     print indent, 'pot_min:', pot_min
 #     print indent, 'min/max_cover:', min_cover, max_cover
-#     print indent, 'pot_start/end/indices:', [(i,pot_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(pot_start, pot_end))]    
-#     print indent, 'Gnew:', [(i, x, y, Gnew_indices[x:y].tolist()) for i, (x, y) in enumerate(zip(Gnew_start, Gnew_end))]
+#     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]    
+#     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
     
-    return cliques, cliques_indptr, cliques_n, max_cover, tree_size
+    return C, CP, CN, max_cover, tree
 
 def max_clique_cover(to_cover, G, verbose=False, pmc=False):
     """Call's PMC maximum clique on each new edge"""
-
-    import clique_maximum
     
     if isspmatrix_csc(G):
         G = csr_matrix(G)
@@ -1053,62 +1033,9 @@ def max_clique_cover(to_cover, G, verbose=False, pmc=False):
             
         clique_list.extend(cliques)
 
-        # for c in cliques:
-        #     assert c not in clique_set
-        #     clique_set.add(c)
-
-        # # Remove edges that were just explained
-        # for c in cliques:
-        #     edges -= set(itertools.combinations(sorted(c), 2))
-
     clique_list = sorted(set(clique_list))
     
     print 'Augment iterations:', it, 'time:', time.time() - start
     
     return clique_list
     
-def print_tree(tree_size):
-    
-    # In[45]:
-
-    print tree_size[0,:4]
-    step = 30
-    width = 6
-    marker_types = ['o', 'x']
-    marker = marker_types[0]
-    # for i in range(min(tree_size[0,0] / step + 1, 100)):
-    for i in range(52, 100):
-        print step*i, step*(i+1) 
-        print '-------', ''.join([str(x).ljust(width) for x in range(step*i, step*(i+1))])
-        print '-------', ''.join(['-----'.ljust(width) for x in range(step*i, step*(i+1))])  # ---------------------
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[0, step*i:step*(i+1)]])  # depth
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[7, step*i:step*(i+1)]])  # sub_max_possible
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[6, step*i:step*(i+1)]])  # P.size
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[18, step*i:step*(i+1)]])  # original branches_sizes for this branch
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[19, step*i:step*(i+1)]])  # recomputed branches_sizes for this branch (influenced by earlier branches)
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[20, step*i:step*(i+1)]]) # best size estimate among all branches
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[17, step*i:step*(i+1)]])  # best possible from X
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[9, step*i:step*(i+1)]])  # v
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[10, step*i:step*(i+1)]]) # Gnew/Gsep
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[12, step*i:step*(i+1)]]) # exit status
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[13, step*i:step*(i+1)]]) # sub_max_cover
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[21, step*i:step*(i+1)]]) # pivot u
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[11, step*i:step*(i+1)]]) # branches (raw)
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[15, step*i:step*(i+1)]]) # actual branches that branched
-
-        print '\t', ''.join([str(x).ljust(width) for x in tree_size[8, step*i:step*(i+1)]]) # Parent index
-
-        tmp = []
-        for j in range(step*i, step*(i+1)):
-            if tree_size[8, j] != j-1:
-                marker = marker_types[1] if marker==marker_types[0] else marker_types[0]
-    #             0 / asdf
-            tmp.append(marker)
-    #     print tmp
-        print '\t', ''.join([x.ljust(width) for x in tmp])
-
-        print '\t', ''.join([str(x).ljust(width) for x in np.minimum(9000, tree_size[1, step*i:step*(i+1)])]) # min_cover
-        print '\t', ''.join([str(x).ljust(width) for x in np.minimum(9000, tree_size[2, step*i:step*(i+1)])]) # min_newly_capt
-        print '\t', ''.join([str(x).ljust(width) for x in np.minimum(9000, tree_size[3, step*i:step*(i+1)])]) # min_cover_within
-        print '\t', ''.join([str(x).ljust(width) for x in np.minimum(9000, tree_size[4, step*i:step*(i+1)])]) # sub_min_cover_between
-
