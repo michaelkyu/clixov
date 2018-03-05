@@ -87,6 +87,12 @@ def expand_2d_arr(arr):
     return arr2
 
 @jit(nopython=True, cache=cache)
+def expand_1d_arr(arr):
+    arr2 = np.zeros(2*arr.size, arr.dtype)
+    arr2[:arr.size] = arr
+    return arr2
+
+@jit(nopython=True, cache=cache)
 def move_PX_fast(GI, GS, GE, pos, PS, sep, v):
     """Assumes X is not used, and that all v from GS to GE must be
     traversed.

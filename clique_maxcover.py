@@ -17,8 +17,7 @@ from color import set_color, get_branch_sizes, get_branch_sizes_vw
 
 verbose = False
 
-
-def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth=100000):
+def BK_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth=100000):
     if PX is None:
         k = Gold.shape[0]
         PX = np.arange(k).astype(np.int32)
@@ -83,7 +82,7 @@ def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_
     tree.fill(-1)
     tree[0, :2] = np.array([0,0])
     
-    C, CP, CN, max_cover, tree = BKPivotSparse2_Gnew_cover(
+    C, CP, CN, max_cover, tree = BK_Gnew_cover(
         R, R_end, PX, PS, sep, XE, PS, XE, pos,
         Gold_start, Gold_end, Gold_indices,
         GS_new, GE_end, GI_new,
@@ -102,7 +101,7 @@ def BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_
     return C, CP, CN, tree
 
 @jit(nopython=True, cache=cache)
-def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
+def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                               GS, GE, GI, GS_new, GE_end, GI_new,
                               PXbuf, depth,
                               potI, potS, potE, pot_min, prev_max_possible,
@@ -352,7 +351,7 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 
             prev_CN = CN
             
-            C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gsep_cover(
+            C, CP, CN, sub_max_cover, tree = BK_Gsep_cover(
                 R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                 GS, GE, GI,
                 GS_new, GE_end, GI_new,
@@ -422,7 +421,7 @@ def BKPivotSparse2_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     return C, CP, CN, max_cover, tree
 
 @jit(nopython=True, cache=cache)
-def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
+def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                               GS, GE, GI, GS_new, GE_end, GI_new,
                               PXbuf, depth,
                               btw_new, btw_stack, btw_end,
@@ -884,7 +883,7 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             prev_CN = CN
             
             if btw_new[v]:
-                C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gsep_cover(
+                C, CP, CN, sub_max_cover, tree = BK_Gsep_cover(
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                     GS, GE, GI,
                     GS_new, GE_end, GI_new,
@@ -893,7 +892,7 @@ def BKPivotSparse2_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                     sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
                     C, CP, CN, tree)
             else:
-                C, CP, CN, sub_max_cover, tree = BKPivotSparse2_Gnew_cover(
+                C, CP, CN, sub_max_cover, tree = BK_Gnew_cover(
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                     GS, GE, GI,
                     GS_new, GE_end, GI_new,

@@ -1,5 +1,6 @@
 import time
 import numpy as np
+import scipy.sparse
 from scipy.sparse import isspmatrix, isspmatrix_csc, isspmatrix_csr, csc_matrix, csr_matrix
 from collections import OrderedDict, Counter
 
@@ -7,19 +8,12 @@ from mkl_spgemm import dot
 
 from numba import jit
 
+from constants import cache
 
-@jit(nopython=True)
+@jit(nopython=True, cache=cache)
 def trim_cliques(cliques, cliques_indptr, cliques_n):
     return cliques[:cliques_indptr[cliques_n]], cliques_indptr[:cliques_n+1], cliques_n
         
-# def as_dense(X):    
-#     if isspmatrix(X):
-#         return X.toarray()
-#     elif isinstance(X, np.matrixlib.defmatrix.matrix):
-#         return np.array(X)
-#     else:
-#         return X
-
 def as_dense_array(X, order=None):
     if isspmatrix(X):
         return X.toarray(order=order)
@@ -126,7 +120,7 @@ def check_cliques(G, cliques=None, order=None, method='igraph'):
     if method=='numba':
         start = time.time()
         PX = np.arange(k).astype(np.int32)
-        ref_cliques, ref_cliques_indptr, ref_cliques_n, _ = BKPivotSparse2_Gnew_wrapper(Gold, Gnew, PX=PX)
+        ref_cliques, ref_cliques_indptr, ref_cliques_n, _ = BK_Gnew_py(Gold, Gnew, PX=PX)
         ref_cliques = [tuple(sorted(ref_cliques[ref_cliques_indptr[i]:ref_cliques_indptr[i+1]])) for i in range(ref_cliques_n)]
         print 'Time:', time.time() - start
     elif method=='igraph':
@@ -173,35 +167,96 @@ def assert_clique(clique, G):
     total = (clique.size * (clique.size-1)) / 2
     assert edges == total, 'Edges: %s, Possible: %s' % (edges, total)
 
+from numba import jit
+
+@jit(nopython=True, cache=cache)
+def remove_diagonal_nb(data, indices, indptr):
+    ## Assumes well formatted sparse matrix with sorted indices
+
+    new_data = np.empty(data.size, data.dtype)
+    new_indices = np.empty(indices.size, indices.dtype)
+    new_indptr = indptr.copy()
+    end = 0
+    new_end = 0
+    offset = 0
+    
+    n = indptr.size - 1
+    for i in range(n):
+        for j in range(indptr[i],indptr[i+1]):
+            if i==indices[j]:
+                new_data[new_end : new_end + j - end] = data[end : j]
+                new_indices[new_end : new_end + j - end] = indices[end : j]
+                new_end += j - end
+                end = j + 1
+                offset += 1
+                break
+        new_indptr[i+1] -= offset
+            
+    very_end = indptr[n]
+    new_data[new_end : new_end + very_end - end] = data[end : very_end]
+    new_indices[new_end : new_end + very_end  - end] = indices[end : very_end]
+    new_end += very_end - end
+
+    return new_data[:new_end], new_indices[:new_end], new_indptr
+
+def remove_diagonal(X):
+    assert isspmatrix_csr(X) or isspmatrix_csc(X)
+    X.data, X.indices, X.indptr = remove_diagonal_nb(X.data, X.indices, X.indptr)
+            
+def fill_diagonal(X, val):
+    assert X.shape[0]==X.shape[1]
+    if isspmatrix(X):
+        n = X.shape[0]
+        X[np.arange(n), np.arange(n)] = 0        
+        X.eliminate_zeros()
+    else:
+        np.fill_diagonal(X, val)
+
 def subsumption(X, XX=None):
     """
     Returns array sub where sub[i,j]==1 if X[:,i] is a subset of X[:,j], and 0 otherwise.
     """
 
-    X_sizes = as_dense_flat(X.sum(0))
+    X_sizes = get_clique_sizes(X)
     if XX is None:
-        XX = dot(X.T, X)
-        
-    if issparse(XX):
-        # XX = as_dense_array(XX)
-
-        assert isspmatrix_csr(XX)
-        raise Exception('To finish')
-#        XX.indices
-            
-        X_min_sizes = np.minimum(X_sizes.reshape(-1,1), X_sizes.reshape(1,-1))
-        X_was_min_sizes = X_sizes.reshape(-1,1) >= X_sizes.reshape(1,-1)
-
-        sub = XX == X_min_sizes
-        sub[X_was_min_sizes] = 0
-        return sub
+        H = dot(X.T, X)
     else:
-        X_min_sizes = np.minimum(X_sizes.reshape(-1,1), X_sizes.reshape(1,-1))
-        X_was_min_sizes = X_sizes.reshape(-1,1) >= X_sizes.reshape(1,-1)
+        H = XX.copy()
+        
+    if isspmatrix(H):
+        assert isspmatrix_csr(H)
+        H.data = (H.data == np.repeat(X_sizes, H.indptr[1:]-H.indptr[:-1]))
+    else:
+        H = H == X_sizes.reshape(1,-1)
 
-        sub = XX == X_min_sizes
-        sub[X_was_min_sizes] = 0
-        return sub
+    fill_diagonal(H, 0)
+    return H
+    
+def update_subsumption(X, dX, H):
+    X_sizes = get_clique_sizes(X)
+    dH = dot(X.T, dX)
+    bottom_shape = (dX.shape[1], X.shape[1]+dX.shape[1])
+    if isspmatrix(dH):
+        assert isspmatrix_csr(dH) and isspmatrix(H)        
+        dH.data = (dH.data == np.repeat(X_sizes, dH.indptr[1:]-dH.indptr[:-1])).astype(H.dtype)
+        dH.eliminate_zeros()
+        # print type(dH)
+        H = scipy.sparse.hstack([H, dH])
+        #H = H.tocsr()
+        
+        # # Manually add in empty rows
+        # assert isspmatrix_csr(H)
+        # H.indptr = np.append(H.indptr, np.repeat(H.indptr[-1], dX.shape[1]))
+        # H.shape = (H.shape[1], H.shape[1])
+        
+        H = scipy.sparse.vstack([H,
+                                 scipy.sparse.csr_matrix(bottom_shape, dtype=H.dtype)])
+        # print type(H)           
+    else:
+        dH = (dH == X_sizes.reshape(1,-1)).astype(H.dtype)
+        H = np.vstack([np.hstack([H, dH]),
+                       np.zeros(bottom_shape, H.dtype)])
+    return H
     
 def assert_unique_cliques(cliques):
     if isinstance(cliques, csc_matrix):
@@ -210,4 +265,5 @@ def assert_unique_cliques(cliques):
         tmp = cliques
     assert len(tmp)==len(set(tmp))
 
-    
+def get_clique_sizes(X):
+    return as_dense_flat(X.sum(0))

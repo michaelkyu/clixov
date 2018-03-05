@@ -12,7 +12,7 @@ from constants import cache
 def test_clique_maximal(method, k, r, s, check=True):
     G = get_test_network(method, k=k, r=r, s=s)
     start = time.time()
-    cliques, cliques_indptr, cliques_n = clique_maximal.BKPivotSparse2_wrapper(G)
+    cliques, cliques_indptr, cliques_n = clique_maximal.BK_py(G)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
@@ -22,27 +22,27 @@ def test_clique_maximal(method, k, r, s, check=True):
         assert set(tmp1) == set(tmp2)    
 
 def test_clique_maximal_new(method, k, r, s, check=True):
-    Gold, Gnew = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
+    G, dG = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BKPivotSparse2_Gnew_wrapper(Gold, Gnew)
+    cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BK_dG_py(G, dG)
     print 'Time:', time.time() - start
-    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, Gold.shape[0])
+    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-        tmp2 = clique_maximal.get_cliques_igraph(Gold.shape[0], Gold + Gnew, Gnew, input_fmt='matrix')
+        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G + dG, dG, input_fmt='matrix')
         assert set(tmp1) == set(tmp2)
 
 def test_clique_maximal_hier_new(method, k, r, s, check=True):
-    Gold, Gnew = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
+    G, dG = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BKPivotSparse2_Gnew_wrapper(Gold, Gnew)
+    cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BK_dG_py(G, dG)
     print 'Time:', time.time() - start
-    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, Gold.shape[0])
+    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-        tmp2 = clique_maximal.get_cliques_igraph(Gold.shape[0], Gold + Gnew, Gnew, input_fmt='matrix')
+        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G + dG, dG, input_fmt='matrix')
         assert set(tmp1) == set(tmp2)
 
 def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
@@ -74,19 +74,19 @@ def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
         print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
 
 def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False, check=True):
-    Gold, Gnew = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
+    G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BKPivotSparse2_Gnew_cover_wrapper(Gold, Gnew)
+    cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BK_dG_cover_py(G, dG)
     print 'Time:', time.time() - start
-    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, Gold.shape[0])
+    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
-    cover_idx = clixov_utils.get_largest_clique_covers(cliques, Gnew)
+    cover_idx = clixov_utils.get_largest_clique_covers(cliques, dG)
     cliques = cliques[:,cover_idx]
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
         start = time.time()
-        tmp2 = clique_maxcover.max_clique_cover(Gnew, Gold + Gnew, verbose=verbose)
+        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=verbose)
         print 'Alternative time:', time.time() - start
 
         try:
@@ -94,7 +94,7 @@ def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False, check=Tr
         except:
             if verbose:
                 print 'Shared:', sorted(set(tmp1) & set(tmp2))
-                G = Gold + Gnew
+                G = G + dG
                 print 'Found:', sorted(set(tmp1) - set(tmp2))
                 print 'Not found:', sorted(set(tmp2) - set(tmp1))
                 for c in sorted(set(tmp1) - set(tmp2)):
@@ -143,9 +143,6 @@ def get_test_network(method, k, r, s, invert=False, seed=None):
         np.fill_diagonal(G, 0)
         G = G.astype(np.int32, order='F')
         G = csc_matrix(G)
-
-#        print G.nonzero()
-        
     if invert:
         G = 1 - G.toarray()
         np.fill_diagonal(G, 0)
@@ -187,20 +184,20 @@ def get_test_new_network(method,
     np.random.seed(seed=seed)
     
     if method=='cluster':
-        Gold = np.zeros((k,k), dtype=np.int32, order='F')
+        G = np.zeros((k,k), dtype=np.int32, order='F')
         old_clusters = [np.random.randint(0, k, r) for i in range(s)]
         for c in old_clusters:
-            Gold[np.ix_(c,c)] = True
-        np.fill_diagonal(Gold, 0)
+            G[np.ix_(c,c)] = True
+        np.fill_diagonal(G, 0)
         
-        Gnew = np.zeros((k,k), dtype=np.int32, order='F')
+        dG = np.zeros((k,k), dtype=np.int32, order='F')
         new_clusters = [np.random.randint(0, k, r) for i in range(s)]
         for c in new_clusters:
-            Gnew[np.ix_(c,c)] = True
-        np.fill_diagonal(Gnew, 0)
+            dG[np.ix_(c,c)] = True
+        np.fill_diagonal(dG, 0)
         
-        Gnew -= (Gnew * Gold)
-        Gold, Gnew = csc_matrix(Gold), csc_matrix(Gnew)        
+        dG -= (dG * G)
+        G, dG = csc_matrix(G), csc_matrix(dG)        
     elif method=='erdos':
         G = np.zeros((k,k), dtype=np.bool, order='F')
         G[np.random.randint(0, k, k * r), np.random.randint(0, k, k * r)] = True
@@ -208,47 +205,47 @@ def get_test_new_network(method,
         np.fill_diagonal(G, 0)
         G = G.astype(np.bool, order='F')
 
-        Gnew = G.copy()
-        Gnew.data[np.random.random(G.data.size) < p] = 0
-        Gnew.eliminate_zeros()
-        Gnew = csc_matrix((Gnew.T.toarray() * Gnew.toarray()))
-        Gold = csc_matrix(G.toarray() & ~ Gnew.toarray())
+        dG = G.copy()
+        dG.data[np.random.random(G.data.size) < p] = 0
+        dG.eliminate_zeros()
+        dG = csc_matrix((dG.T.toarray() * dG.toarray()))
+        G = csc_matrix(G.toarray() & ~ dG.toarray())
     elif method=='hierarchy':
         edges, H = generate_hierarchy(n, p, r, seed=seed)
 
-        Gold = H + (H.dot(H.T) > 0)
+        G = H + (H.dot(H.T) > 0)
         
-        # Gold = np.zeros((n,n), np.bool_)
+        # G = np.zeros((n,n), np.bool_)
 
         
         
         # for i in range(H.shape[1]):
         #     members = H[:n, i].nonzero()[0]
-        #     Gold[np.ix_(members, members)] = 1
+        #     G[np.ix_(members, members)] = 1
 
 #        get_test_network('cluster', 
         
     else:
         raise Exception('Unsupported method')
     
-    assert Gnew.sum() > 0
-    assert (Gnew.multiply(Gold)).sum() == 0
+    assert dG.sum() > 0
+    assert (dG.multiply(G)).sum() == 0
         
     if verbose:
-        print Gnew.sum() / 2, Gold.sum() / 2, 'Gnew/old edges'
-        # print Gold.toarray().astype(np.int32)
-#        print 'Gold:', sorted(set([tuple(sorted(x)) for x in zip(*Gold.nonzero())]))
-        print 'Gold:', clixov_utils.sparse_str(Gold)
-        # print Gnew.toarray().astype(np.int32)
-#        print 'Gnew:', sorted(set([tuple(sorted(x)) for x in zip(*Gnew.nonzero())]))
-        print 'Gnew:', clixov_utils.sparse_str(Gnew)
+        print dG.sum() / 2, G.sum() / 2, 'dG/old edges'
+        # print G.toarray().astype(np.int32)
+#        print 'G:', sorted(set([tuple(sorted(x)) for x in zip(*G.nonzero())]))
+        print 'G:', clixov_utils.sparse_str(G)
+        # print dG.toarray().astype(np.int32)
+#        print 'dG:', sorted(set([tuple(sorted(x)) for x in zip(*dG.nonzero())]))
+        print 'dG:', clixov_utils.sparse_str(dG)
     
-    # G_start, G_end, G_indices = Gold.indptr[:-1], Gold.indptr[1:], Gold.indices
-    # Gnew_start, Gnew_end, Gnew_indices = Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices
-    # print 'Gold:', [(v, G_start[v], G_end[v], list(G_indices[G_start[v] : G_end[v]])) for v in np.arange(k) if G_end[v] > G_start[v]]
-    # print 'Gnew:', [(v, Gnew_start[v], Gnew_end[v], list(G_indices[Gnew_start[v] : Gnew_end[v]])) for v in np.arange(k) if Gnew_end[v] > Gnew_start[v]]
+    # G_start, G_end, G_indices = G.indptr[:-1], G.indptr[1:], G.indices
+    # dG_start, dG_end, dG_indices = dG.indptr[:-1], dG.indptr[1:], dG.indices
+    # print 'G:', [(v, G_start[v], G_end[v], list(G_indices[G_start[v] : G_end[v]])) for v in np.arange(k) if G_end[v] > G_start[v]]
+    # print 'dG:', [(v, dG_start[v], dG_end[v], list(G_indices[dG_start[v] : dG_end[v]])) for v in np.arange(k) if dG_end[v] > dG_start[v]]
 
-    return Gold, Gnew
+    return G, dG
 
 def generate_hierarchy(n, p, r, seed=None):
     """

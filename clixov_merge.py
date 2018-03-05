@@ -10,7 +10,7 @@ from scipy.sparse import issparse, csc_matrix, coo_matrix
 import clixov_utils
 from clixov_utils import *
 import clique_maximal
-from clique_maximal import get_cliques_igraph, BKPivotSparse2_Gnew_wrapper
+from clique_maximal import get_cliques_igraph, BK_dG_py
 from call_openblas import sgemm_openblas
 import mkl_spgemm
 from mkl_spgemm import dot, elt_multiply
@@ -108,46 +108,135 @@ def test_merge_AB(i, j, GA, A, GB, B, threshold, to_merge):
                 to_merge[0] = False
                 break
 
-def get_merge_mask1(A, GA, B, GB, G, threshold_loose, threshold_strict, symm, notest=None, onlytest=None):
+# def test_merge_sp(XI, XS, XE, beta):
+#     n = XS.size
+#     # for i in range(n):
+#     #     for j in range(
+
+#     i, j, k
+
+# def test_merge_sp_ij(X, Y):
+#     i = 0
+#     j = 0
+#     while True:
+#         X_i = X[i]
+#         Y_j = Y[j]
+#         if X_i < Y_j:
+#             i += 1
+#             continue
+#         elif X_i > Y_j:
+#             j += 1
+#             continue
+        
+            
+        
+# def test_merge_sp(totest,
+#                   XI, XP, X_sizes,
+#                   GX, GXI, GXP,
+#                   XX, XXI, XXP
+#                   degree,
+#                   beta):
+#     # i, j
+#     for i in to_test:
+#         X_sizes_i = X_sizes[i]
+#         XXP_i = XXP[i] #:XXP[i+1]
+
+#         mode = 'fixed_j'
+#         while True:
+#             # Roll-up
+#             j += 1
+
+#             # Roll up XXP_i until it hits j
+#             if XXI[XXP_i] < j:
+#                 XXP_i += 1
+#                 continue
+#             elif XXI[XXP_i] > j:
+#                 XX_val = 0
+#             else:
+#                 XX_val = XX[XXP_i]
+
+#             # Roll up GX_i until it hits j
+            
+            
+#         for j in to_test:
+
+#             while XXP_i < XXP[i+1]
+#                 # asdf
+                
+            
+#             intersect = XX[i,j]
+#             union = X_sizes[j] + X_sizes_i
+
+#     min(X_sizes[i]
+        
+    
+# @jit(nopython=True, cache=cache)
+# def nonzero_min_sp(data, indptr):
+#     min_arr = np.empty(indptr.size, data.dtype)
+#     for i in range(indptr.size):
+#         min_arr[i] = data[indptr[i]:indptr[i+1]].min()
+#         return min_arr
+
+        
+def get_merge_mask1(A, GA, B, GB, G,
+                    beta,
+                    symm,
+                    notest=None, onlytest=None, A_ds=None):
     """Pre-filtering approach based on N(a), followed by checking filtered (i,j) pairs"""
     
     degree = as_dense_flat(G.sum(0)).reshape(-1,1)
-    A_min_degree = nonzero_min((degree * A).T)
-    A_test = threshold_loose <= A_min_degree.reshape(-1, 1)
-    if symm:
-        B_min_degree, B_test = A_min_degree, A_test
-    else:        
-        B_min_degree = nonzero_min((degree * B).T)
-        B_test = threshold_loose <= B_min_degree.reshape(1, -1)
-    pairs_to_test = np.logical_and(A_test, B_test)
-    
-    if notest is not None:
-        # if issparse(notest) or isinstance(notest, np.ndarray):
-        #     tmp1, tmp2 = notest.nonzero()
-        #     pairs_to_test[tmp1, tmp2] = 0
-        # else:
-        
-        tmp1, tmp2 = notest
-        pairs_to_test[tmp1, tmp2] = 0
-        pairs_to_test[tmp2, tmp1] = 0
+    if issparse(A):
+        # assert isspmatrix_csc(A)
+        # #A_min_degree = A.copy()
+        # deg_data = degree[A.indices]
+        # A_min_degree = nonzero_min_sp(deg_data, A.indptr)
+        # A_test = threshold_loose <= A_min_degree.reshape(-1,1)
 
-    if onlytest is not None:
-        pairs_to_test = (pairs_to_test & onlytest)
+        # Remove notest from onlytest
+        onlytest -= elt_multiply(onlytest, notest)
+                
+        # Iterate through onlytest to see if it passes the A_test and
+        # B_test
+        i_list, j_list = onlytest.nonzero()
+    else:
+        threshold_loose, threshold_strict = get_thresholds_symm(A, beta)
+                
+        A_min_degree = (degree * A).T
+        A_min_degree = nonzero_min(A_min_degree)
+        A_test = threshold_loose <= A_min_degree.reshape(-1, 1)
+        if symm:
+            B_min_degree, B_test = A_min_degree, A_test
+        else:        
+            B_min_degree = nonzero_min((degree * B).T)
+            B_test = threshold_loose <= B_min_degree.reshape(1, -1)
+        pairs_to_test = np.logical_and(A_test, B_test)
 
-    i_list, j_list = pairs_to_test.nonzero()
+        if notest is not None:
+            tmp1, tmp2 = notest
+            pairs_to_test[tmp1, tmp2] = 0
+            pairs_to_test[tmp2, tmp1] = 0
+
+        if onlytest is not None:
+            pairs_to_test = (pairs_to_test & onlytest)
+
+        i_list, j_list = pairs_to_test.nonzero()
     
     if symm:
-        # pairs_to_test[np.tril_indices(pairs_to_test.shape[0], k=0)] = False
         tmp = i_list < j_list
         i_list, j_list = i_list[tmp], j_list[tmp]
-#    else:
-        #print 'Test %s out of %s clique pairs:' % (pairs_to_test.sum() / 2, (A.shape[1] * (B.shape[1] - 1)))
     print 'Test %s out of %s clique pairs:' % (len(i_list), (A.shape[1] * (B.shape[1] - 1)))
-    sys.stdout.flush()
 
     start = time.time()
     if symm:
-        to_merge = test_merge(i_list, j_list, GA, A, threshold_strict[i_list, j_list])    
+        if issparse(A):
+            A_sizes = get_clique_sizes(A)
+            intersection = as_dense_flat(dot(A.T, A)[i_list, j_list])
+            union = A_sizes[i_list] + A_sizes[j_list] - intersection
+            threshold_strict = beta * (union - 1) + intersection
+
+            to_merge = test_merge(i_list, j_list, GA, A_ds, threshold_strict)
+        else:
+            to_merge = test_merge(i_list, j_list, GA, A, threshold_strict[i_list, j_list])    
     else:
         to_merge = test_merge_AB(i_list, j_list, GA, A, GB, B, threshold_strict[i_list, j_list])
     print 'Test merge time:', time.time() - start
@@ -229,57 +318,91 @@ def get_thresholds_symm(A, beta):
 #         merge = (merge > 0).astype(X.dtype)
 #     return merge
 
-def calc_and_do_merge(X_sp, X, GX, G, beta, prev_merge_i, prev_merge_j, method='1', Gnew=None):
-    if method=='1':
-        H = subsumption(X_sp).T
-        H = csr_matrix(H)
+# def calc_and_do_merge(X_sp, X, GX, G, beta,
+#                       prev_merge_i, prev_merge_j, method='1',
+#                       H=None, dG=None):
+#     if method=='1':
+#         assert H is not None
+#         H = csr_matrix(H.T)
 
-        tmp_i, tmp_j = H.nonzero()        
-        prev_merge_i = np.append(prev_merge_i, tmp_i)
-        prev_merge_j = np.append(prev_merge_j, tmp_j)
+#         tmp_i, tmp_j = H.nonzero()        
+#         prev_merge_i = np.append(prev_merge_i, tmp_i)
+#         prev_merge_j = np.append(prev_merge_j, tmp_j)
 
-        if Gnew is not None:
-            XGX = dot(dot(X_sp.T, Gnew), X_sp) > 0
-            onlytest = XGX.toarray()
-            print 'onlytest:', onlytest.sum()
-        else:
-            onlytest = None
+#         if dG is not None:
+#             onlytest = dot(dot(X_sp.T, dG), X_sp) > 0
+#             # onlytest = onlytest.toarray()
+#             print 'onlytest:', onlytest.sum()
+#         else:
+#             onlytest = None
 
-        notest = (prev_merge_i, prev_merge_j)
-            
-        threshold_loose, threshold_strict = get_thresholds_symm(X_sp, beta)
-        
-        start = time.time()
-        i_merge, j_merge = get_merge_mask1(X, GX, X, GX, G,
-                                           threshold_loose, threshold_strict,
-                                           symm=True,
-                                           notest=notest,
-                                           onlytest=onlytest)
-        print 'get_merge_mask1 time:', time.time() - start
+#         notest = (prev_merge_i, prev_merge_j)
+                    
+#         start = time.time()
+#         i_merge, j_merge = get_merge_mask1(X_sp, GX, X_sp, GX, G,
+#                                            beta,
+#                                            symm=True,
+#                                            notest=notest,
+#                                            onlytest=onlytest)
+#         print 'get_merge_mask1 time:', time.time() - start
 
-        start = time.time()
-        merge = do_merge(X_sp, i_merge, j_merge, prev_merge_i, prev_merge_j, H=H)
-        print 'do_merge time:', time.time() - start
+#         start = time.time()
+#         merge = do_merge(X_sp, i_merge, j_merge, prev_merge_i, prev_merge_j, H=H)
+#         print 'do_merge time:', time.time() - start
 
-        return merge, i_merge, j_merge
-    elif method=='2':
-        threshold_loose, threshold_strict = get_thresholds(A, A, beta)
-        i_merge, j_merge = get_merge_mask1(A, GA, A, GA, G, threshold_loose, threshold_strict, symm=True)
-        return do_merge(A, i_merge, j_merge)
-    else:
-        raise Exception('Unsupported')
+#         return merge, i_merge, j_merge
+#     elif method=='2':
+#         threshold_loose, threshold_strict = get_thresholds(A, A, beta)
+#         i_merge, j_merge = get_merge_mask1(A, GA, A, GA, G, threshold_loose, threshold_strict, symm=True)
+#         return do_merge(A, i_merge, j_merge)
+#     else:
+#         raise Exception('Unsupported')
 
-def do_merge(X, i_merge, j_merge, prev_merge_i, prev_merge_j, H=None):
+def calc_and_do_merge(X_sp, X, GX, G, beta,
+                      prev_merge,
+                      H=None, dG=None):
+    assert H is not None
+    H = csr_matrix(H.T)
+
+    notest = csr_matrix(prev_merge + H + H.T)
+
+    onlytest = dot(dot(X_sp.T, dG), X_sp) > 0
+    print 'onlytest:', onlytest.sum()
+    
+    start = time.time()
+    i_merge, j_merge = get_merge_mask1(X_sp, GX, X_sp, GX, G,
+                                       beta,
+                                       symm=True,
+                                       notest=notest,
+                                       onlytest=onlytest,
+                                       A_ds=X)
+    print 'get_merge_mask1 time:', time.time() - start
+
     n = X.shape[1]
-    Gnew = coo_matrix((np.ones(2 * i_merge.size, np.int32),
-                       (np.append(i_merge, j_merge),
-                        np.append(j_merge, i_merge))),
-                      (n,n)).tocsc()
-    Gold = coo_matrix((np.ones(2 * prev_merge_i.size, np.int32),
-                       (np.append(prev_merge_i, prev_merge_j),
-                        np.append(prev_merge_j, prev_merge_i))),
-                      (n,n)).tocsc()
-    assert Gnew.multiply(Gold).sum() == 0
+    meta_dG = coo_matrix((np.ones(2*i_merge.size, np.int32),
+                          (np.append(i_merge, j_merge), np.append(j_merge, i_merge))),
+                         (n,n)).tocsc()
+
+    start = time.time()
+    #dX = do_merge(X_sp, i_merge, j_merge, prev_merge_i, prev_merge_j, H=H)
+    dX = do_merge(X_sp, meta_dG, notest, H=H)
+    print 'do_merge time:', time.time() - start
+
+    return dX, meta_dG
+
+#def do_merge(X, i_merge, j_merge, prev_merge_i, prev_merge_j, H=None):
+def do_merge(X, dG, G, H=None):
+    n = X.shape[1]
+
+    # dG = coo_matrix((np.ones(2 * i_merge.size, np.int32),
+    #                    (np.append(i_merge, j_merge),
+    #                     np.append(j_merge, i_merge))),
+    #                   (n,n)).tocsc()
+    # G = coo_matrix((np.ones(2 * prev_merge_i.size, np.int32),
+    #                    (np.append(prev_merge_i, prev_merge_j),
+    #                     np.append(prev_merge_j, prev_merge_i))),
+    #                (n,n)).tocsc()
+    assert dG.multiply(G).sum() == 0
     
     cliques_csc_list = []
 
@@ -287,39 +410,45 @@ def do_merge(X, i_merge, j_merge, prev_merge_i, prev_merge_j, H=None):
     it = 0
 
     ngenes = X.shape[0]
-    orig_Gnew_genes = Gnew[:ngenes,:ngenes]
-                           
-    while Gnew.sum() > 0:        
-        print 'Iteration:', it, 'Gold/Gnew sum:', Gold.sum(), Gnew.sum()
-
-        ## This transfer from Gnew to Gold should only occur temporarily within each iteration
-        tmp = dot(dot(H.T, Gnew) > 0, H) > 0
-        tmp2 = Gnew.multiply(tmp) > 0
-        print '\t', 'Transferred from Gnew to Gold:', tmp2.sum()
+    orig_dG_genes = dG[:ngenes,:ngenes]
+            
+    while dG.sum() > 0:
+        print 'Iteration:', it, 'G/dG sum:', G.sum(), dG.sum()
+        
+        ## This transfer from dG to G should only occur temporarily within each iteration
+        ## Only going to look at new edges between highest level nodes in current hierarchy
+        tmp = dot(dot(H.T, dG) > 0, H) > 0
+        tmp2 = dG.multiply(tmp) > 0
+        print '\t', 'Transferred from dG to G:', tmp2.sum()
         start = time.time()
-        C, CP, CN, tree = clique_maximal.BK_hier_Gnew_wrapper(Gold + tmp2, Gnew - tmp2, H, verbose=False)
-        print '\t', 'Search tree nodes / time:', tree[0], time.time() - start
+        C, CP, CN, tree = clique_maximal.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
+        print '\t', 'Search tree nodes / time:', tree.size, time.time() - start
         cliques_csc = cliques_to_csc(C, CP, CN, n)
         assert_unique_cliques(cliques_csc)
-        
         print '\t', 'Meta cliques:', cliques_csc.shape[1], clixov_utils.format_clique_sizes(cliques_csc)
 
         cliques_csc_list.append(cliques_csc)
-
         cliques_csc_trans = cliques_csc + (dot(H.T, cliques_csc) > 0).astype(cliques_csc.dtype)
-        unexplained = get_unexplained_edges(cliques_csc_trans, Gnew)
+
+        # if G.sum() >= 348440:
+        #     import cPickle
+        #     with open('tmp.npy', 'wb') as f:
+        #         cPickle.dump((cliques_csc_trans, dG), f)
+        #     0 / asdf
+            
+        unexplained = get_unexplained_edges(cliques_csc_trans, dG)
         print '\t', 'Unexplained meta edges:', unexplained.sum()
         
         if last_unexplained == unexplained.sum():
             import cPickle
             with open('tmp.npy', 'wb') as f:
-                cPickle.dump((Gold, Gnew, H), f)
+                cPickle.dump((G, dG, H), f)
             raise
         last_unexplained = unexplained.sum()
 
-        Gold += Gnew - unexplained
-        Gold = csc_matrix(Gold)
-        Gnew = csc_matrix(unexplained)
+        G += dG - unexplained
+        G = csc_matrix(G)
+        dG = csc_matrix(unexplained)
 
         it += 1
 
@@ -337,22 +466,22 @@ def do_merge(X, i_merge, j_merge, prev_merge_i, prev_merge_j, H=None):
     # tmp = csc_to_cliques_list(merge)
     # assert len(tmp)==len(set(tmp))
 
-    # tmp = []                    
-    in_X = set(csc_to_cliques_list(X))
-    for i in range(merge.shape[1]):
-        assert tuple(sorted(merge[:,i].nonzero()[0])) not in in_X
-        # if tuple(sorted(merge[:,i].nonzero()[0])) not in in_X:
-        #     tmp.append(i)
-    # merge = merge[:,tmp]
-    # print 'Merge cliques:', merge.shape[1], clixov_utils.format_clique_sizes(merge)
+    # # tmp = []                    
+    # in_X = set(csc_to_cliques_list(X))
+    # for i in range(merge.shape[1]):
+    #     assert tuple(sorted(merge[:,i].nonzero()[0])) not in in_X
+    #     # if tuple(sorted(merge[:,i].nonzero()[0])) not in in_X:
+    #     #     tmp.append(i)
+    # # merge = merge[:,tmp]
+    # # print 'Merge cliques:', merge.shape[1], clixov_utils.format_clique_sizes(merge)
         
     # Filter the cliques to the set of largest clique covers for each
     # new edge between genes (importantly, we're not covering the new
     # edges between old cliques)
     start = time.time()
-    idx = get_largest_clique_covers(merge, orig_Gnew_genes)
+    idx = get_largest_clique_covers(merge, orig_dG_genes)
     merge = merge[:,idx]
-    print 'orig_Gnew_genes:', orig_Gnew_genes.sum(), time.time() - start
+    print 'orig_dG_genes:', orig_dG_genes.sum(), time.time() - start
     print 'Merge cliques (cover):', merge.shape[1], clixov_utils.format_clique_sizes(merge)
 
     X = csc_matrix(scipy.sparse.hstack([X, merge]))
@@ -369,15 +498,11 @@ def get_unexplained_edges(X, G):
     Y = dot(X, X.T)
     if issparse(Y):
         Y.data = (Y.data > 0).astype(X.dtype)
-        diag = np.arange(Y.shape[0])
-        try:
-            Y[diag, diag] = 0
-        except scipy.sparse.SparseEfficiencyWarning:
-            pass
-        Y.eliminate_zeros()
+        # fill_diagonal(Y, 0)
+        remove_diagonal(Y)
     else:
         Y = (Y > 0).astype(X.dtype)
-        np.fill_diagonal(Y, 0)
+        fill_diagonal(Y, 0)
 
     Y = G - elt_multiply(G, Y)
     return Y
