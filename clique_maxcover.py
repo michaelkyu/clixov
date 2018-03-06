@@ -17,56 +17,36 @@ from color import set_color, get_branch_sizes, get_branch_sizes_vw
 
 verbose = False
 
-def BK_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth=100000):
-    if PX is None:
-        k = Gold.shape[0]
-        PX = np.arange(k).astype(np.int32)
-        pos = np.empty(PX.size, np.int32)
-        pos[PX] = np.arange(PX.size)
-    else:
-        k = Gold.shape[0]
-        pos = np.empty(k, np.int32)
-        pos[:] = -1
-        pos[PX] = np.arange(PX.size)
-    R = np.zeros(PX.size, np.int32)
-    R_end = np.int32(0)    
-    sep = PX.size
-    PXbuf = np.zeros(k, np.bool_)
-    PXbuf2 = np.ones(k, np.bool_)
-    PS, sep, XE = np.int32([0, sep, PX.size])
-    btw_new = np.zeros(PX.size, np.bool_)
-    btw_stack = np.arange(PX.size).astype(np.int32)
-    btw_end = 0
-    
-    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
-    CP[:2] = 0
+def BK_dG_cover_py(G, dG, PX=None, degeneracy=None, max_branch_depth=100000):
+    k = G.shape[0]
+    PX, pos, R, R_end, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end = initialize_structures(k, PX=PX)
    
-    GI_new = np.empty(2 * Gnew.indices.size, np.int32)    
+    GI_new = np.empty(2 * dG.indices.size, np.int32)    
     GI_new[1::2] = 0
     
     if degeneracy in ['min', 'max']:
-        assert k == Gnew.shape[0]
-#         G = Gold + Gnew
+        assert k == dG.shape[0]
+#         G = G + dG
         if degeneracy=='max':
-            degen_order, degen_deg = get_degeneracy_max(Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices)
+            degen_order, degen_deg = get_degeneracy_max(dG.indptr[:-1], dG.indptr[1:], dG.indices)
         if degeneracy=='min':
 #             degen_order, degen_deg = get_degeneracy_min(G.indptr[:-1], G.indptr[1:], G.indices)
-            degen_order, degen_deg = get_degeneracy_min(Gnew.indptr[:-1], Gnew.indptr[1:], Gnew.indices)
+            degen_order, degen_deg = get_degeneracy_min(dG.indptr[:-1], dG.indptr[1:], dG.indices)
         degen_pos = np.empty(k, np.int32)
         degen_pos[degen_order] = np.arange(k).astype(np.int32)
-        GI_new[::2] = degen_pos[Gnew.indices]
-        GS_new = 2 * Gnew.indptr[:-1][degen_order]
-        GE_end = 2 * Gnew.indptr[1:][degen_order]
+        GI_new[::2] = degen_pos[dG.indices]
+        GS_new = 2 * dG.indptr[:-1][degen_order]
+        GE_end = 2 * dG.indptr[1:][degen_order]
         
-        Gold_indices = degen_pos[Gold.indices]
-        Gold_start, Gold_end = Gold.indptr[:-1][degen_order], Gold.indptr[1:][degen_order]
+        G_indices = degen_pos[G.indices]
+        G_start, G_end = G.indptr[:-1][degen_order], G.indptr[1:][degen_order]
     else:
-        GI_new[::2] = Gnew.indices
-        GS_new = 2 * Gnew.indptr[:-1]
-        GE_end = 2 * Gnew.indptr[1:]        
-        Gold_start, Gold_end, Gold_indices = Gold.indptr[:-1], Gold.indptr[1:], Gold.indices
+        GI_new[::2] = dG.indices
+        GS_new = 2 * dG.indptr[:-1]
+        GE_end = 2 * dG.indptr[1:]        
+        G_start, G_end, G_indices = G.indptr[:-1], G.indptr[1:], G.indices
     
-    potI = np.empty(3 * Gnew.indices.size, np.int32)
+    potI = np.empty(3 * dG.indices.size, np.int32)
     potI[:] = 0
     potS = GS_new.copy() * 3 / 2
     potE = GS_new.copy() * 3 / 2
@@ -82,11 +62,11 @@ def BK_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth
     tree.fill(-1)
     tree[0, :2] = np.array([0,0])
     
-    C, CP, CN, max_cover, tree = BK_Gnew_cover(
+    C, CP, CN, max_cover, tree = BK_dG_cover(
         R, R_end, PX, PS, sep, XE, PS, XE, pos,
-        Gold_start, Gold_end, Gold_indices,
+        G_start, G_end, G_indices,
         GS_new, GE_end, GI_new,
-        PXbuf2, 0, btw_new, btw_stack, btw_end,
+        Tbuf, 0, btw_new, btw_stack, btw_end,
         potI, potS, potE, pot_min, max_possible,
         min_cover, max_cover, min_cover_btw, max_branch_depth,
         C, CP, CN, tree)
@@ -102,11 +82,11 @@ def BK_Gnew_cover_wrapper(Gold, Gnew, PX=None, degeneracy=None, max_branch_depth
 
 @jit(nopython=True, cache=cache)
 def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                              GS, GE, GI, GS_new, GE_end, GI_new,
-                              PXbuf, depth,
-                              potI, potS, potE, pot_min, prev_max_possible,
-                              min_cover, max_cover, min_cover_btw, max_branch_depth,
-                              C, CP, CN, tree):
+                  GS, GE, GI, GS_new, GE_end, GI_new,
+                  Tbuf, depth,
+                  potI, potS, potE, pot_min, prev_max_possible,
+                  min_cover, max_cover, min_cover_btw, max_branch_depth,
+                  C, CP, CN, tree):
 
     orig_size = 4 + tree[0, 0]
     curr_tree = 4 + tree[0, 0]    
@@ -126,8 +106,8 @@ def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     #     print indent, 'R:', R, 'P:', P, 'X:', X
     #     print indent, 'min_cover:', min_cover, 'min_cover_btw:', min_cover_btw, 'prev_max_possible:', prev_max_possible
     #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
-    #     print indent, 'Gold:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
-    #     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
+    #     print indent, 'G:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
+    #     print indent, 'dG:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
         
     if P.size==0:
         tree[0, 1] += 1
@@ -157,8 +137,7 @@ def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     P_degree_new = np.zeros(sep - PS, np.int32)
     for v_i in range(XE-1, PS-1, -1):
         v = PX[v_i]
-        v_degree, curr = move_PX(GI, GS, GE,
-                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
+        v_degree, curr = move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])
 
         # Move P and X to the bottom
         v_degree_new, curr_new = 0, GS_new[v]
@@ -355,7 +334,7 @@ def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                 GS, GE, GI,
                 GS_new, GE_end, GI_new,
-                PXbuf, depth+1,
+                Tbuf, depth+1,
                 potI, potS, potE, pot_min, sub_max_possible,
                 sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
                 C, CP, CN, tree)
@@ -415,19 +394,19 @@ def BK_Gsep_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'R:', R, 'P:', P, 'X:', X
 #     print indent, 'min/max_cover:', min_cover, max_cover
 #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
-#     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]  
+#     print indent, 'dG:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]  
 #     assert np.all(potE >= potS)
 
     return C, CP, CN, max_cover, tree
 
 @jit(nopython=True, cache=cache)
-def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
-                              GS, GE, GI, GS_new, GE_end, GI_new,
-                              PXbuf, depth,
-                              btw_new, btw_stack, btw_end,
-                              potI, potS, potE, pot_min, prev_max_possible,
-                              min_cover, max_cover, min_cover_btw, max_branch_depth,
-                              C, CP, CN, tree):
+def BK_dG_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
+                GS, GE, GI, GS_new, GE_end, GI_new,
+                Tbuf, depth,
+                btw_new, btw_stack, btw_end,
+                potI, potS, potE, pot_min, prev_max_possible,
+                min_cover, max_cover, min_cover_btw, max_branch_depth,
+                C, CP, CN, tree):
     """
     btw_new[v]: Is there a new edge crossing btw R and node v in P?
     """
@@ -451,7 +430,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 
     # if verbose:
     #     indent = '\t' * depth
-    #     print indent, '--------Gnew-------'
+    #     print indent, '--------dG-------'
     #     print indent, 'DEPTH:', depth
     #     print indent, 'PX:', PX
     #     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
@@ -460,8 +439,8 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     #     print indent, 'btw_new:', btw_new.astype(np.int32)
     #     print indent, 'pot_min:', pot_min
     #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
-    #     print indent, 'Gold:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
-    #     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
+    #     print indent, 'G:', [(i, x, y, GI[x:y].tolist()) for i, (x, y) in enumerate(zip(GS, GE))]
+    #     print indent, 'dG:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
     
     if P.size==0:
         tree[12, curr_tree] = 2
@@ -543,8 +522,8 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     incd_degree = incd_degree[:incd_count]
     X_incd = X_incd[:X_incd_count]
 
-    PXbuf[incd] = False
-    PXbuf[X_incd] = False
+    Tbuf[incd] = False
+    Tbuf[X_incd] = False
     new_incd = np.empty(XE - PS - incd.size, PX.dtype)
     new_incd_end = 0
     
@@ -563,19 +542,19 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 GI[curr], GI[w_i] = w, GI[curr]
                 curr += 1
                 
-                if PXbuf[w]:
+                if Tbuf[w]:
                     new_incd[new_incd_end] = w
                     new_incd_end += 1
-                    PXbuf[w] = False        
+                    Tbuf[w] = False        
         P_degree[pos[v] - PS] += v_degree_old
 
-    PXbuf[incd] = True
-    PXbuf[X_incd] = True
+    Tbuf[incd] = True
+    Tbuf[X_incd] = True
     new_incd = new_incd[:new_incd_end]
-    PXbuf[new_incd] = True
+    Tbuf[new_incd] = True
     
-    PXbuf[incd] = False
-    PXbuf[new_incd] = False
+    Tbuf[incd] = False
+    Tbuf[new_incd] = False
     for v in new_incd:
         curr = GS[v]
         v_degree = 0
@@ -586,13 +565,13 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 break
             elif PS <= w_pos and w_pos < XE:
                 ## Counts only those neighbors that are in P and in (incd, new_incd)
-                v_degree += (w_pos < sep) and not PXbuf[w]
+                v_degree += (w_pos < sep) and not Tbuf[w]
                 GI[curr], GI[w_i] = w, GI[curr]
                 curr += 1
         if pos[v] < sep:
             P_degree[pos[v] - PS] += v_degree
-    PXbuf[incd] = True
-    PXbuf[new_incd] = True
+    Tbuf[incd] = True
+    Tbuf[new_incd] = True
     
     #--------------------------------#
     
@@ -602,8 +581,8 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     nei_list = np.empty(sep - PS, np.int32)
     max_colors = 0
 
-    PXbuf[incd] = False
-    PXbuf[new_incd] = False
+    Tbuf[incd] = False
+    Tbuf[new_incd] = False
     
     # Recompute P_degree    
     for v_i in range(sep, PS):
@@ -613,20 +592,20 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
-            v_degree += (w_pos < sep) and (not PXbuf[w])
+            v_degree += (w_pos < sep) and (not Tbuf[w])
         for w in GI[GS[v] : GE[v]]:
             w_pos = pos[w]
             if w_pos < PS or w_pos >= XE:
                 break
-            v_degree += (w_pos < sep) and (not PXbuf[w])
+            v_degree += (w_pos < sep) and (not Tbuf[w])
         P_degree[v_i] = v_degree
                 
     for v_i in np.argsort(-1 * P_degree):
-        if not PXbuf[P[v_i]]:
+        if not Tbuf[P[v_i]]:
             max_colors = set_color(GI_new, GS_new, GE_end, GI, GS, GE,
                                    pos, P, sep, PS, XE, v_i, colors, nei_bool, nei_list, max_colors)
-    PXbuf[incd] = True
-    PXbuf[new_incd] = True
+    Tbuf[incd] = True
+    Tbuf[new_incd] = True
         
     max_possible = R.size + max_colors
     if max_possible < min(min_cover, min_cover_within, min_cover_btw):
@@ -652,25 +631,25 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     ## Get branches
     Padj_u = GI[GS[u] : u_curr]
     Padj_new_u = GI_new[GS_new[u] : u_curr_new : 2]        
-    PXbuf[Padj_u] = False
-    PXbuf[Padj_new_u] = False
+    Tbuf[Padj_u] = False
+    Tbuf[Padj_new_u] = False
     
     ### Consideration: maybe btw_new[P] should only be included if the pivot is in P?    
     # Always keep the btw_new
-    PXbuf[P[btw_new[P]]] = True
+    Tbuf[P[btw_new[P]]] = True
     
-    # Ensure that for any node left out of P, all of its Gnew neighbors in P are included
-    for v in incd[~ PXbuf[incd]]:
-        if not PXbuf[v]:
+    # Ensure that for any node left out of P, all of its dG neighbors in P are included
+    for v in incd[~ Tbuf[incd]]:
+        if not Tbuf[v]:
             # By construction, this will only iterate over w's that are in incd
             for w in GI_new[GS_new[v] : GE_end[v]: 2]:
                 w_pos = pos[w]
-                PXbuf[w] = True
+                Tbuf[w] = True
                 if w_pos < PS or w_pos >= XE:
                     break
-    branches = incd[PXbuf[incd]]
+    branches = incd[Tbuf[incd]]
     if see_purpose:
-        extra_priority = branches_purpose[PXbuf[incd]]
+        extra_priority = branches_purpose[Tbuf[incd]]
     else:
         extra_priority = np.zeros(branches.size, np.bool_)
     
@@ -687,7 +666,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         distinct_count = 0
         for w in GI[GS[v] : GE[v]]:
             w_pos = pos[w]
-            if PS <= w_pos and w_pos < sep and incd_bool[w] and (not PXbuf[w]) and colors[w_pos - PS] > v_color:
+            if PS <= w_pos and w_pos < sep and incd_bool[w] and (not Tbuf[w]) and colors[w_pos - PS] > v_color:
                 w_col = colors[w_pos - PS]
                 if not distinct_bool[w_col]:
                     distinct_bool[w_col] = True
@@ -697,7 +676,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                 break
         for w in GI_new[GS_new[v] : GE_end[v] : 2]:
             w_pos = pos[w]
-            if PS <= w_pos and w_pos < sep and incd_bool[w] and (not PXbuf[w]) and colors[w_pos - PS] > v_color:
+            if PS <= w_pos and w_pos < sep and incd_bool[w] and (not Tbuf[w]) and colors[w_pos - PS] > v_color:
                 w_col = colors[w_pos - PS]
                 if not distinct_bool[w_col]:
                     distinct_bool[w_col] = True
@@ -708,8 +687,8 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         distinct_bool[distinct[:distinct_count]] = False
         branches_sizes[v_i] += distinct_count
         
-    PXbuf[Padj_new_u] = True
-    PXbuf[Padj_u] = True
+    Tbuf[Padj_new_u] = True
+    Tbuf[Padj_u] = True
 
     #####
     ## Strongly prioritize branching off btw_new first
@@ -718,7 +697,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
     branches = branches[branches_order]
     branches_sizes = branches_sizes[branches_order]
     
-#     print indent, 'Gnew:', [(i, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]    
+#     print indent, 'dG:', [(i, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]    
 #     print indent, 'min_cover_within:', min_cover_within    
 #     print indent, 'incd:', incd[:incd_count]
 #     print indent, 'pivot u:', u
@@ -795,7 +774,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #         print indent, 'min/max_cover:', min_cover, max_cover        
 #         print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]
 #         print indent, 'potS/end:', zip(potS, potE)
-#         print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
+#         print indent, 'dG:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
 #         print indent, 'sub_max_possible:', sub_max_possible, 'min(min_cover, min_cover_within, min_cover_btw):', min(min_cover, min_cover_within, min_cover_btw)
 #         sub_max_possible = R.size + 1 + branches_sizes[v_i]
 
@@ -864,7 +843,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
         if newly_capt.size > 0:
             min_newly_capt = newly_capt[newly_capt.size - 2]
         
-        ## Don't need to apply this criterion yet (since Gnew assumes no new edge yet)
+        ## Don't need to apply this criterion yet (since dG assumes no new edge yet)
         ## However, if you do, then do it on a min_below computes by PX-by-PX looping above
         if sep - new_PS == 0:
             do_subbranch = min(sub_max_possible, R.size + 1 + (sep - new_PS)) >= min(min_cover, min_newly_capt, sub_min_cover_btw)
@@ -887,16 +866,16 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                     GS, GE, GI,
                     GS_new, GE_end, GI_new,
-                    PXbuf, depth+1,
+                    Tbuf, depth+1,
                     potI, potS, potE, pot_min, sub_max_possible,
                     sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
                     C, CP, CN, tree)
             else:
-                C, CP, CN, sub_max_cover, tree = BK_Gnew_cover(
+                C, CP, CN, sub_max_cover, tree = BK_dG_cover(
                     R_buff, R_end + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
                     GS, GE, GI,
                     GS_new, GE_end, GI_new,
-                    PXbuf, depth+1,
+                    Tbuf, depth+1,
                     btw_new, btw_stack, btw_end + btw_added,
                     potI, potS, potE, pot_min, sub_max_possible,
                     sub_min_cover, max_cover, sub_min_cover_btw, max_branch_depth,
@@ -966,7 +945,7 @@ def BK_Gnew_cover(R_buff, R_end, PX, PS, sep, XE, oldPS, oldXE, pos,
 #     print indent, 'pot_min:', pot_min
 #     print indent, 'min/max_cover:', min_cover, max_cover
 #     print indent, 'potS/end/indices:', [(i,potI[x:y].tolist()) for i, (x, y) in enumerate(zip(potS, potE))]    
-#     print indent, 'Gnew:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
+#     print indent, 'dG:', [(i, x, y, GI_new[x:y].tolist()) for i, (x, y) in enumerate(zip(GS_new, GE_end))]
     
     return C, CP, CN, max_cover, tree
 
@@ -1038,3 +1017,315 @@ def max_clique_cover(to_cover, G, verbose=False, pmc=False):
     
     return clique_list
     
+def max_clique_cover_new(to_cover, G, dG, verbose=False, pmc=False):
+    """Call's PMC maximum clique on each new edge"""
+    
+    if isspmatrix_csc(G):
+        G = csr_matrix(G)
+        assert isspmatrix_csr(G)
+    else:
+        raise Exception()
+    
+    clique_list = []
+    clique_set = set([])
+    
+    # Unexplained edges
+    e_i, e_j = to_cover.nonzero()
+    tmp = e_i < e_j
+    e_i, e_j = e_i[tmp], e_j[tmp]
+    edges = set(zip(e_i, e_j))
+
+    it = 0
+    start = time.time()
+        
+    # Iterate until there are no more unexplained edges
+    while len(edges) > 0:
+        # if verbose:
+        #     print 'edges:', edges
+
+        it += 1
+        i, j = edges.pop()
+        
+        # nonzero()[1] assumes that G is sparse. Otherwise do nonzero()[0]
+        if verbose:
+            print i, j, G[i, :].nonzero()[1], G[j, :].nonzero()[1]
+        P = np.intersect1d(G[i, :].nonzero()[1], G[j, :].nonzero()[1])
+        P.sort()
+
+        if P.size > 1:
+            G_P = G[P,:][:,P]
+
+            if pmc:
+                clique = pmc.pmc(G_P, threads=48, verbose=False)            
+                if clique.size==0:
+                    # Pick a random elt from P to make the clique
+                    clique = (P[0], i, j)
+                else:
+                    clique = tuple([P[k] for k in clique] + [i,j])
+                cliques = [clique]
+            else:
+                cliques, _, _ = clique_maximum.MC_py(G_P, verbose=False)
+                cliques = [tuple([P[k] for k in c] + [i,j]) for c in clixov_utils.csc_to_cliques_list(cliques)]
+
+        elif P.size==1:
+            cliques = [(P[0], i, j)]
+        else:
+            cliques = [(i,j)]
+
+        cliques = [tuple(sorted(c)) for c in cliques]
+
+        if verbose:
+            print 'c:', cliques, 'P:', P, 'i,j:', (i,j)
+            
+        clique_list.extend(cliques)
+
+    clique_list = sorted(set(clique_list))
+    
+    print 'Augment iterations:', it, 'time:', time.time() - start
+    
+    return clique_list
+    
+
+
+
+
+@jit(nopython=True, cache=cache)
+def MC_bf_cover(R_buff, R_end, PX, pos,
+                GS, GE, GI,
+                dGS, dGE, dGI,
+                cover,
+                Fbuf, Tbuf, depth,
+                C, CP, CN, core_nums, core_nums2,
+                tree, offset=0, verbose=True):
+    sep = PX.size
+    old_sep = sep        
+    
+    for v in range(PX.size):
+        if (core_nums[v] + 1) >= (max_cover + offset):
+            new_sep, P = update_P(GI, GS, GE, PX, old_sep, sep, pos, v)
+
+            if P.size > 0:
+
+                # Compare degeneracy with the maximum of the max
+                # covers across all edges incident on v
+                if (2 + core_nums[P].max()) >= dGI[dGS[v]+1 : dGE[v] : 2].max():
+                    GE_prev, P_copy = GE[P], P.copy()
+                    
+                    # Push down GI and dGI
+                    Fbuf[P] = True
+                    for u in P:
+                        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, Fbuf, u)
+                        u_degree_new, dGE[u] = move_PX_fast_bool_2(dGI, dGS, dGE, Fbuf, u)
+                    Fbuf[P] = False
+
+                    # Index the max covers for each edge incident on v
+                    max_cover_v = np.empty(PX.size, np.int32)
+                    max_cover_v[dGI[dGS[v] : dGE[v] : 2]] = dGI[dGS[v] + 1 : dGE[v] : 2]
+                    
+                    colors, branches = color_nodes(GI, GS, GE, np.sort(P.copy())[::-1])
+
+                    for w in branches:                    
+                        if (1 + colors.max()) >= max_cover_v[w]:
+                            R_buff[R_end] = v            
+
+                            prev_CN = CN
+                            C, CP, CN, tree, sub_cover = MC_Branch(
+                                R_buff, R_end + 1, PX, new_sep, pos,
+                                GS, GE, GI,
+                                Fbuf, Tbuf, depth + 1,
+                                max_cover,
+                                C, CP, CN, core_nums, core_nums2,
+                                tree, offset=offset, verbose=verbose)
+
+                            # # Iterate over new cliques
+                            # for c_i in range(prev_CN, CN):
+                            #     c = C[CP[c_i]:CP[c_i+1]]
+                            #     for u in c:                                    
+                            #         # Update maxcover for all edges in this clique                            
+                            #         for x_i in range(dG] : dGS):
+                                        
+                    
+                    GE[P_copy] = GE_prev
+            else:                
+                R_buff[0] = v
+                C, CP, CN = update_cliques2(C, CP, CN, R_buff[:1])
+
+        # Remove v from P
+        sep -= 1
+        swap_pos(PX, pos, v, sep)
+
+    C, CP, CN = trim_cliques(C, CP, CN)
+    return C, CP, CN, tree, max_cover
+
+@jit(nopython=True, cache=cache)
+def MC_branch_bf_cover(R_buff, R_end, PX, sep, pos,
+                       GS, GE, GI,
+                       Fbuf, Tbuf, depth,
+                       max_cover,
+                       C, CP, CN, core_nums, core_nums2,
+                       tree, offset=0, verbose=True):
+    P = PX[ : sep]
+
+    tree, curr_tree = update_tree_size(tree, depth, max_cover)
+    
+#     if verbose:
+#         indent = '\t' * depth
+#         print indent, '---------MC_branch------'
+#         print indent, 'DEPTH:', depth, 'max_cover:', max_cover
+#         print indent, 'R:', R_buff[:R_end]
+#         print indent, 'P:', P
+
+    # Check bound on size of P
+    if (R_end + P.size) < (max_cover + offset):
+        tree[6, curr_tree] = 0
+        return C, CP, CN, tree, 0
+    elif P.size==0:
+        tree[6, curr_tree] = 1
+        C, CP, CN = update_cliques2(C, CP, CN, R_buff[:R_end])
+        return C, CP, CN, tree, R_end
+        
+    # Push down GI
+    max_degree = 0
+    Fbuf[P] = True
+    for u in P:
+        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, Fbuf, u)
+        max_degree = max(u_degree, max_degree)
+    Fbuf[P] = False
+    
+    # Check bound on max degree
+    if (R_end + max_degree + 1) < (max_cover + offset):
+        tree[6, curr_tree] = 2
+        return C, CP, CN, tree, 0
+    
+    color_order = np.sort(P.copy())[::-1]
+    
+#     if depth==1:
+#         color_order, core_num_vals = get_degeneracy(GI, GS, GE, P)
+# #           # If change core_num here, then must change core_num_bound at reduce_G
+# #         core_num = np.empty(PX.size, np.int32)
+# #         core_num[color_order] = core_num_vals
+# #         color_order = color_order[::-1]
+#     else:
+#         color_order = np.sort(P.copy())[::-1]
+            
+    ## Color
+    colors, branches = color_nodes(GI, GS, GE, color_order)
+    old_sep = sep
+    
+    for v_i in range(branches.size -1, -1, -1):
+        v = branches[v_i]
+        if (R_end + colors[v_i]) >= (max_cover + offset):
+    #         if verbose:  print indent, 'Branching at v:', v, 'depth:', depth
+
+            R_buff[R_end] = v
+            new_sep, P = update_P(GI, GS, GE, PX, old_sep, sep, pos, v)
+            GE_prev, P_copy = GE[P], P.copy()
+
+            tree = update_tree_size_branch(tree, curr_tree, v, R_end + colors[v_i], new_sep)
+
+            C, CP, CN, tree, sub_cover = MC_Branch(
+                R_buff, R_end + 1, PX, new_sep, pos,
+                GS, GE, GI,
+                Fbuf, Tbuf, depth + 1,
+                max_cover,
+                C, CP, CN, core_nums, core_nums2,
+                tree, offset=offset, verbose=verbose)
+            GE[P_copy] = GE_prev
+
+            if sub_cover > max_cover:
+                max_cover = sub_cover
+                sep, P = reduce_G(GI, GS, GE, Fbuf, core_nums2, max_cover + offset - 1, PX, pos, sep)
+
+        # Remove v from P
+        sep -= 1
+        swap_pos(PX, pos, v, sep)
+        
+    tree[6, curr_tree] = 5
+    return C, CP, CN, tree, max_cover
+
+
+def MC_bf_cover_py(dG, G, max_cover=0, offset=0, verbose=False):
+    """
+    dG is the edges to cover. G is the complete graph, including edges in dG.
+
+    Goes through each edge one-by-one to find the maximum clique containing that edge.
+    """
+    
+    ## Degeneracy
+    GS, GE, GI = G.indptr[:-1].copy(), G.indptr[1:].copy(), G.indices.copy()
+    degen_order, core_num = get_degeneracy(GI, GS, GE,
+                                           np.arange(G.shape[0]).astype(np.int32))
+    if verbose:
+        print 'degen_order/core_num:', zip(degen_order, core_num)
+    
+    ## Identify nodes with insufficient core number
+    sep = ((core_num + 1) >= max_cover).nonzero()[0]
+    if sep.size > 0:
+        sep = sep[0]
+        keep = degen_order[sep : ]
+        if verbose:
+            print 'keep:', keep
+            print 'Reduced_size:', keep.size
+    else:
+        keep = degen_order    
+    
+    ## Remove nodes
+    G = G[:,keep][keep,:]
+    GS, GE, GI = G.indptr[:-1].copy(), G.indptr[1:].copy(), G.indices.copy()
+    k = G.shape[0]
+    PX = np.arange(k).astype(np.int32)
+
+    if verbose:
+        print_sparse(G)
+        
+    core_num = core_num[np.argsort(degen_order)][keep]
+
+    ## Initialize data structures
+    pos = np.arange(PX.size)
+    R_buff = np.empty(PX.size, np.int32)
+    R_end = 0
+    Fbuf = np.zeros(PX.size, np.bool)
+    Tbuf = np.ones(PX.size, np.bool)
+    C, CP, CN = np.empty(PX.size, np.int32), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0
+    depth = 0
+                       
+    tree = np.asfortranarray(np.zeros((14, 100000), np.int32))
+    tree.fill(-1)
+    tree[:, :2] = np.array([0,0])
+
+    core_num2 = core_num.copy()
+    for i in range(1, core_num2.size):
+        core_num2[i] = max(core_num2[i], core_num2[i-1])
+    if verbose:
+        print 'core_num:', core_num
+        print 'core_num2:', core_num2
+    
+    start_time = time.time()    
+    C, CP, CN, tree, max_cover = MC(
+        R_buff, R_end, PX, pos,
+        GS, GE, GI,
+        Fbuf, Tbuf, depth,
+        max_cover,
+        C, CP, CN, core_num, core_num2,
+        tree, offset=offset, verbose=verbose)
+    
+    if verbose:
+        print 'Time:', time.time() - start_time
+    
+    tree = tree[:,:tree[0,0]+1]
+    
+    C = keep[C]
+    
+    if verbose: print 'tree:', tree[0, :3]
+    if verbose: print 'Clique sizes (%s):' % CN, Counter(CP[1:] - CP[:-1])
+
+    tmp_cliques = [tuple(sorted(C[CP[i]:CP[i+1]])) for i in range(CN)]        
+    max_size = max([len(x) for x in tmp_cliques])
+    if verbose: print 'Cliques:', tmp_cliques
+    cliques = tuples_to_csc(tmp_cliques, degen_order.size)
+    if verbose: print 'Found cliques:', cliques.shape[1], as_dense_flat(cliques.sum(0))
+    cliques, max_clique = get_largest_cliques(cliques)
+    if verbose: print 'After filtering for largest cliques:', cliques.shape[1]
+    
+    return cliques, keep, tree

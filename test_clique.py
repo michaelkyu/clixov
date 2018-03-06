@@ -86,7 +86,7 @@ def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False, check=Tr
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
         start = time.time()
-        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=verbose)
+        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=False)
         print 'Alternative time:', time.time() - start
 
         try:

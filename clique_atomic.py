@@ -3,6 +3,31 @@ from numba import jit
 
 from constants import cache
 
+#@jit(nopython=True, cache=cache):
+def initialize_structures(k, PX=None):
+    if PX is None:
+        PX = np.arange(k).astype(np.int32)
+        pos = np.empty(PX.size, np.int32)
+        pos[PX] = np.arange(PX.size)
+    else:
+        pos = np.empty(k, np.int32)
+        pos[:] = -1
+        pos[PX] = np.arange(PX.size)
+
+    R = np.zeros(PX.size, np.int32)
+    R_end = np.int32(0)    
+    sep = PX.size
+    PXbuf = np.zeros(k, np.bool_)
+    PXbuf2 = np.ones(k, np.bool_)
+    PS, sep, XE = np.int32([0, sep, PX.size])
+    btw_new = np.zeros(PX.size, np.bool_)
+    btw_stack = np.arange(PX.size).astype(np.int32)
+    btw_end = 0
+
+    C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
+    CP[:2] = 0
+
+    return PX, pos, R, R_end, sep, PS, sep, XE, PXbuf, PXbuf2, C, CP, CN, btw_new, btw_stack, btw_end
 
 @jit(nopython=True, cache=cache)
 def swap_pos(PX, pos, w, PX_idx):

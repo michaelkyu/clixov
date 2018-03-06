@@ -52,7 +52,7 @@ def MC(R_buff, R_end, PX, pos,
                         R_buff[R_end] = v            
                         
 #                         if verbose:  print 'Branching at v:', v, 'depth:', depth
-                        C, CP, CN, tree, sub_cover = MC_Branch(
+                        C, CP, CN, tree, sub_cover = MC_branch(
                             R_buff, R_end + 1, PX, new_sep, pos,
                             GS, GE, GI,
                             PXbuf, PXbuf2, depth + 1,
@@ -78,7 +78,7 @@ def MC(R_buff, R_end, PX, pos,
     return C, CP, CN, tree, max_cover
 
 @jit(nopython=True, cache=cache)
-def MC_Branch(R_buff, R_end, PX, sep, pos,
+def MC_branch(R_buff, R_end, PX, sep, pos,
               GS, GE, GI,
               PXbuf, PXbuf2, depth,
               max_cover,
@@ -143,7 +143,7 @@ def MC_Branch(R_buff, R_end, PX, sep, pos,
 
             tree = update_tree_size_branch(tree, curr_tree, v, R_end + colors[v_i], new_sep)
 
-            C, CP, CN, tree, sub_cover = MC_Branch(
+            C, CP, CN, tree, sub_cover = MC_branch(
                 R_buff, R_end + 1, PX, new_sep, pos,
                 GS, GE, GI,
                 PXbuf, PXbuf2, depth + 1,
