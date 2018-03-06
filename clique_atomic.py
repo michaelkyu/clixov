@@ -3,7 +3,6 @@ from numba import jit
 
 from constants import cache
 
-#@jit(nopython=True, cache=cache):
 def initialize_structures(k, PX=None):
     if PX is None:
         PX = np.arange(k).astype(np.int32)
@@ -17,8 +16,8 @@ def initialize_structures(k, PX=None):
     R = np.zeros(PX.size, np.int32)
     R_end = np.int32(0)    
     sep = PX.size
-    PXbuf = np.zeros(k, np.bool_)
-    PXbuf2 = np.ones(k, np.bool_)
+    Fbuf = np.zeros(k, np.bool_)
+    Tbuf = np.ones(k, np.bool_)
     PS, sep, XE = np.int32([0, sep, PX.size])
     btw_new = np.zeros(PX.size, np.bool_)
     btw_stack = np.arange(PX.size).astype(np.int32)
@@ -27,7 +26,10 @@ def initialize_structures(k, PX=None):
     C, CP, CN = np.empty(PX.size, R.dtype), np.empty(PX.size + 1, np.int32), 0
     CP[:2] = 0
 
-    return PX, pos, R, R_end, sep, PS, sep, XE, PXbuf, PXbuf2, C, CP, CN, btw_new, btw_stack, btw_end
+    stats = np.array([0], np.int32)
+    tree = np.asfortranarray(np.zeros(1000, np.int32))
+
+    return PX, pos, R, R_end, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, tree
 
 @jit(nopython=True, cache=cache)
 def swap_pos(PX, pos, w, PX_idx):
@@ -37,7 +39,7 @@ def swap_pos(PX, pos, w, PX_idx):
     pos[w], pos[b] = PX_idx, pos_w
 
 @jit(nopython=True, cache=cache)
-def update_cliques2(cliques, cliques_indptr, cliques_n, R):
+def update_cliques(cliques, cliques_indptr, cliques_n, R):
     new_cliques_end = cliques_indptr[cliques_n] + R.size
     if new_cliques_end > cliques.size:
         cliques = np.concatenate((cliques, np.empty(max(new_cliques_end - cliques.size, 2 * cliques.size), cliques.dtype)))

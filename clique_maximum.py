@@ -17,9 +17,9 @@ from degeneracy import get_degeneracy
 from color import color_nodes
 
 @jit(nopython=True, cache=cache)
-def MC(R_buff, R_end, PX, pos,
+def MC(Rbuf, RE, PX, pos,
        GS, GE, GI,
-       PXbuf, PXbuf2, depth,
+       Fbuf, Tbuf, depth,
        max_cover,
        C, CP, CN, core_nums, core_nums2,
        tree, offset=0, verbose=True):
@@ -33,7 +33,6 @@ def MC(R_buff, R_end, PX, pos,
         
         if (core_nums[v] + 1) >= (max_cover + offset):
             new_sep, P = update_P(GI, GS, GE, PX, old_sep, sep, pos, v)
-#             print 'updated P:', P
             
             if P.size > 0:                
 #                 print 'core_nums[P].max()', core_nums[P].max()
@@ -41,21 +40,21 @@ def MC(R_buff, R_end, PX, pos,
                     GE_prev, P_copy = GE[P], P.copy()
                     
                     # Push down GI
-                    PXbuf[P] = True
+                    Fbuf[P] = True
                     for u in P:
-                        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, PXbuf, u)
-                    PXbuf[P] = False
+                        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, Fbuf, u)
+                    Fbuf[P] = False
 
                     colors, branches = color_nodes(GI, GS, GE, np.sort(P.copy())[::-1])
                     if (1 + colors.max()) >= (max_cover + offset):
                         tree = update_tree_size_branch(tree, curr_tree, v, 1 + colors.max(), new_sep)
-                        R_buff[R_end] = v            
+                        Rbuf[RE] = v            
                         
 #                         if verbose:  print 'Branching at v:', v, 'depth:', depth
                         C, CP, CN, tree, sub_cover = MC_branch(
-                            R_buff, R_end + 1, PX, new_sep, pos,
+                            Rbuf, RE + 1, PX, new_sep, pos,
                             GS, GE, GI,
-                            PXbuf, PXbuf2, depth + 1,
+                            Fbuf, Tbuf, depth + 1,
                             max_cover,
                             C, CP, CN, core_nums, core_nums2,
                             tree, offset=offset, verbose=verbose)
@@ -66,8 +65,8 @@ def MC(R_buff, R_end, PX, pos,
             else:                
                 tree = update_tree_size_branch(tree, curr_tree, v, 1, new_sep)
                 tree[0, 0] += 1
-                R_buff[0] = v
-                C, CP, CN = update_cliques2(C, CP, CN, R_buff[:1])
+                Rbuf[0] = v
+                C, CP, CN = update_cliques(C, CP, CN, Rbuf[:1])
                 max_cover = 1
 
         # Remove v from P
@@ -78,9 +77,9 @@ def MC(R_buff, R_end, PX, pos,
     return C, CP, CN, tree, max_cover
 
 @jit(nopython=True, cache=cache)
-def MC_branch(R_buff, R_end, PX, sep, pos,
+def MC_branch(Rbuf, RE, PX, sep, pos,
               GS, GE, GI,
-              PXbuf, PXbuf2, depth,
+              Fbuf, Tbuf, depth,
               max_cover,
               C, CP, CN, core_nums, core_nums2,
               tree, offset=0, verbose=True):
@@ -92,28 +91,28 @@ def MC_branch(R_buff, R_end, PX, sep, pos,
 #         indent = '\t' * depth
 #         print indent, '---------MC_branch------'
 #         print indent, 'DEPTH:', depth, 'max_cover:', max_cover
-#         print indent, 'R:', R_buff[:R_end]
+#         print indent, 'R:', Rbuf[:RE]
 #         print indent, 'P:', P
 
     # Check bound on size of P
-    if (R_end + P.size) < (max_cover + offset):
+    if (RE + P.size) < (max_cover + offset):
         tree[6, curr_tree] = 0
         return C, CP, CN, tree, 0
     elif P.size==0:
         tree[6, curr_tree] = 1
-        C, CP, CN = update_cliques2(C, CP, CN, R_buff[:R_end])
-        return C, CP, CN, tree, R_end
+        C, CP, CN = update_cliques(C, CP, CN, Rbuf[:RE])
+        return C, CP, CN, tree, RE
         
     # Push down GI
     max_degree = 0
-    PXbuf[P] = True
+    Fbuf[P] = True
     for u in P:
-        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, PXbuf, u)
+        u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, Fbuf, u)
         max_degree = max(u_degree, max_degree)
-    PXbuf[P] = False
+    Fbuf[P] = False
     
     # Check bound on max degree
-    if (R_end + max_degree + 1) < (max_cover + offset):
+    if (RE + max_degree + 1) < (max_cover + offset):
         tree[6, curr_tree] = 2
         return C, CP, CN, tree, 0
     
@@ -134,19 +133,19 @@ def MC_branch(R_buff, R_end, PX, sep, pos,
     
     for v_i in range(branches.size -1, -1, -1):
         v = branches[v_i]
-        if (R_end + colors[v_i]) >= (max_cover + offset):
+        if (RE + colors[v_i]) >= (max_cover + offset):
     #         if verbose:  print indent, 'Branching at v:', v, 'depth:', depth
 
-            R_buff[R_end] = v
+            Rbuf[RE] = v
             new_sep, P = update_P(GI, GS, GE, PX, old_sep, sep, pos, v)
             GE_prev, P_copy = GE[P], P.copy()
 
-            tree = update_tree_size_branch(tree, curr_tree, v, R_end + colors[v_i], new_sep)
+            tree = update_tree_size_branch(tree, curr_tree, v, RE + colors[v_i], new_sep)
 
             C, CP, CN, tree, sub_cover = MC_branch(
-                R_buff, R_end + 1, PX, new_sep, pos,
+                Rbuf, RE + 1, PX, new_sep, pos,
                 GS, GE, GI,
-                PXbuf, PXbuf2, depth + 1,
+                Fbuf, Tbuf, depth + 1,
                 max_cover,
                 C, CP, CN, core_nums, core_nums2,
                 tree, offset=offset, verbose=verbose)
@@ -154,7 +153,7 @@ def MC_branch(R_buff, R_end, PX, sep, pos,
 
             if sub_cover > max_cover:
                 max_cover = sub_cover
-                sep, P = reduce_G(GI, GS, GE, PXbuf, core_nums2, max_cover + offset - 1, PX, pos, sep)
+                sep, P = reduce_G(GI, GS, GE, Fbuf, core_nums2, max_cover + offset - 1, PX, pos, sep)
 
         # Remove v from P
         sep -= 1
@@ -187,23 +186,13 @@ def MC_py(G, max_cover=0, offset=0, verbose=False):
     G = G[:,keep][keep,:]
     GS, GE, GI = G.indptr[:-1].copy(), G.indptr[1:].copy(), G.indices.copy()
     k = G.shape[0]
-    PX = np.arange(k).astype(np.int32)
 
-    if verbose:
-        print_sparse(G)
+    if verbose: print_sparse(G)
         
     core_num = core_num[np.argsort(degen_order)][keep]
 
-    ## Initialize data structures
-    pos = np.arange(PX.size)
-    R_buff = np.empty(PX.size, np.int32)
-    R_end = 0
-    PXbuf = np.zeros(PX.size, np.bool)
-    PXbuf2 = np.ones(PX.size, np.bool)
-    C, CP, CN = np.empty(PX.size, np.int32), np.empty(PX.size + 1, np.int32), 0
-    CP[:2] = 0
-    depth = 0
-                       
+    PX, pos, R, RE, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, tree = initialize_structures(k)
+        
     tree = np.asfortranarray(np.zeros((14, 100000), np.int32))
     tree.fill(-1)
     tree[:, :2] = np.array([0,0])
@@ -217,9 +206,9 @@ def MC_py(G, max_cover=0, offset=0, verbose=False):
     
     start_time = time.time()    
     C, CP, CN, tree, max_cover = MC(
-        R_buff, R_end, PX, pos,
+        R, RE, PX, pos,
         GS, GE, GI,
-        PXbuf, PXbuf2, depth,
+        Fbuf, Tbuf, 0,
         max_cover,
         C, CP, CN, core_num, core_num2,
         tree, offset=offset, verbose=verbose)

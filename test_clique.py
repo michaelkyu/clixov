@@ -1,7 +1,7 @@
 import time
 
 import numpy as np
-from scipy.sparse import csc_matrix
+from scipy.sparse import csc_matrix, csr_matrix
 
 import clixov_utils
 import clique_maximal
@@ -18,7 +18,9 @@ def test_clique_maximal(method, k, r, s, check=True):
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+        start = time.time()
         tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
+        print 'Alternative Time:', time.time() - start
         assert set(tmp1) == set(tmp2)    
 
 def test_clique_maximal_new(method, k, r, s, check=True):
@@ -53,12 +55,13 @@ def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
-            
+        start = time.time()
         tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G, input_fmt='matrix')
         tmp2 = clixov_utils.tuples_to_csc(tmp2, G.shape[0])
         tmp2, _ = clixov_utils.get_largest_cliques(tmp2)
         tmp2 = clixov_utils.csc_to_cliques_list(tmp2)
-
+        print 'Alternative Time:', time.time() - start
+        
         if verbose:
             print clixov_utils.sparse_str(G)
 
@@ -73,20 +76,23 @@ def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
 
         print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
 
-def test_clique_maxcover_new(method, k, r, s, seed=None, verbose=False, check=True):
+def test_clique_maxcover_new(method, k, r, s, seed=None, maxcover_method='BK_dg_cover', verbose=False, check=True):
     G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BK_dG_cover_py(G, dG)
+    if maxcover_method=='BK_dg_cover':
+        cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BK_dG_cover_py(G, dG)
+        cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
+    elif maxcover_method=='MC_bf_cover_py':
+        cliques, keep, tree = clique_maxcover.MC_bf_cover_py(csr_matrix(dG), csr_matrix(dG + G))
     print 'Time:', time.time() - start
-    cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
-
+    
     cover_idx = clixov_utils.get_largest_clique_covers(cliques, dG)
     cliques = cliques[:,cover_idx]
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
         start = time.time()
-        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=False)
+        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=False, pmc=False)
         print 'Alternative time:', time.time() - start
 
         try:
@@ -216,8 +222,6 @@ def get_test_new_network(method,
         G = H + (H.dot(H.T) > 0)
         
         # G = np.zeros((n,n), np.bool_)
-
-        
         
         # for i in range(H.shape[1]):
         #     members = H[:n, i].nonzero()[0]
