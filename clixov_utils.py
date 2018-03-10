@@ -93,9 +93,13 @@ def get_largest_cliques(cliques):
 def print_dense(G):
     print G.toarray()
 
+def sparse_str_I(GI, GS, GE):
+    return [(v, list(GI[GS[v] : GE[v]])) for v in np.arange(GS.size) if GE[v] > GS[v]]
+
 def sparse_str(G):
-    G_start, G_end, G_indices = G.indptr[:-1], G.indptr[1:], G.indices
-    return [(v, list(G_indices[G_start[v] : G_end[v]])) for v in np.arange(G.shape[0]) if G_end[v] > G_start[v]]
+    return sparse_str_I(G.indices, G.indptr[:-1], G.indptr[1:])
+    # G_start, G_end, G_indices = 
+    # return [(v, list(G_indices[G_start[v] : G_end[v]])) for v in np.arange(G.shape[0]) if G_end[v] > G_start[v]]
     
 def sparse_str_indices(G):
     G_start, G_end, G_indices = G.indptr[:-1], G.indptr[1:], G.indices
@@ -108,8 +112,7 @@ def print_density(G):
     print 'G density:', G.sum() / float(G.shape[0] * (G.shape[0] -1))    
 
 def format_clique_sizes(X):
-    return OrderedDict(sorted(Counter(as_dense_flat(X.sum(0)).astype(np.int32)).items(), key=lambda x:x[0]))
-                
+    return OrderedDict(sorted(Counter(as_dense_flat(X.sum(0)).astype(np.int32)).items(), key=lambda x:x[0]))                
 
 def check_cliques(G, cliques=None, order=None, method='igraph'):
     """

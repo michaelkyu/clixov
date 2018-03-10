@@ -68,50 +68,64 @@ def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
         try:
             assert set(tmp1) == set(tmp2)
         except:
-            if verbose:
-                print 'Shared:', sorted(set(tmp1) & set(tmp2))
-                print 'Found:', sorted(set(tmp1) - set(tmp2))
-                print 'Not found:', sorted(set(tmp2) - set(tmp1))
-            raise
+            print 'Shared:', sorted(set(tmp1) & set(tmp2))
+            print 'Uniquely found:', sorted(set(tmp1) - set(tmp2))
+            print 'Not found:', sorted(set(tmp2) - set(tmp1))
+            raise Exception('Did not find the same cliques as reference method')
 
         print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
 
 def test_clique_maxcover_new(method, k, r, s, seed=None, maxcover_method='BK_dg_cover', verbose=False, check=True):
     G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
+    print 'G edges:', G.sum()/2
+    print 'dG edges:', dG.sum()/2
     start = time.time()
     if maxcover_method=='BK_dg_cover':
         cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BK_dG_cover_py(G, dG)
         cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
+        keep, tree = None, None
     elif maxcover_method=='MC_bf_cover_py':
         cliques, keep, tree = clique_maxcover.MC_bf_cover_py(csr_matrix(dG), csr_matrix(dG + G))
+    else:
+        raise Exception('Unsupported method')
     print 'Time:', time.time() - start
     
     cover_idx = clixov_utils.get_largest_clique_covers(cliques, dG)
     cliques = cliques[:,cover_idx]
 
+    # from clixov_utils import as_dense_flat
+    # cliques_sizes = as_dense_flat(cliques.sum(0))
+    # print cliques_sizes
+    # import itertools
+    # for i, j in itertools.combinations([3, 4, 5, 15, 19, 24, 27, 28], 2):
+    #     if dG[i,j]:
+    #         print 'i,j:', (i,j), cliques_sizes[as_dense_flat(cliques[[i,j],:].sum(0)) == 2].max()
+    
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
         start = time.time()
-        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=False, pmc=False)
+        tmp2 = clique_maxcover.max_clique_cover(dG, G + dG, verbose=False, use_pmc=False)
         print 'Alternative time:', time.time() - start
 
+        tmp1_set, tmp2_set = set(tmp1), set(tmp2)
         try:
-            assert set(tmp1) == set(tmp2)
+            assert tmp1_set == tmp2_set
         except:
-            if verbose:
-                print 'Shared:', sorted(set(tmp1) & set(tmp2))
-                G = G + dG
-                print 'Found:', sorted(set(tmp1) - set(tmp2))
-                print 'Not found:', sorted(set(tmp2) - set(tmp1))
-                for c in sorted(set(tmp1) - set(tmp2)):
-                    try:
-                        clixov_utils.assert_clique(c, G)
-                    except:
-                        print 'Not a real clique:', c
-                        print G[:,c][c,:].toarray().astype(np.int32)
-                        raise
-            raise
+            print 'Shared:', sorted(tmp1_set & tmp2_set)
+            G = G + dG
+            found = sorted(tmp1_set - tmp2_set)
+            print 'Found:', found
+            print 'Not found:', sorted(tmp2_set - tmp1_set)
+            for c in found:
+                try:
+                    clixov_utils.assert_clique(c, G)
+                except:
+                    print G[:,c][c,:].toarray().astype(np.int32)
+                    raise Exception('Not a real cliques: %s' % c)
+            raise Exception('Did not find the same cliques as reference method')
 
+    return cliques, keep, tree
+        
 def get_test_network(method, k, r, s, invert=False, seed=None):
     start = time.time()
     if seed is None:
@@ -187,17 +201,25 @@ def get_test_new_network(method,
         seed = np.random.randint(0, 2**32, 1, dtype=np.uint32)[0]
         print 'Seed:', seed
 
-    np.random.seed(seed=seed)
+    np.random.seed(seed)
     
     if method=='cluster':
         G = np.zeros((k,k), dtype=np.int32, order='F')
-        old_clusters = [np.random.randint(0, k, r) for i in range(s)]
+        np.random.seed(seed)
+        tmp = np.random.randint(0, k, r*s)
+        old_clusters = np.split(tmp, s)        
+        #old_clusters = [np.random.randint(0, k, r) for i in range(s)]
+        #old_clusters = [np.random.randint(0, k, np.int32(np.random.normal(loc=r, scale=r/5))) for i in range(s)]
         for c in old_clusters:
             G[np.ix_(c,c)] = True
         np.fill_diagonal(G, 0)
         
         dG = np.zeros((k,k), dtype=np.int32, order='F')
-        new_clusters = [np.random.randint(0, k, r) for i in range(s)]
+        np.random.seed(seed+1)
+        tmp = np.random.randint(0, k, r*s)
+        new_clusters = np.split(tmp, s)        
+        #new_clusters = [np.random.randint(0, k, r) for i in range(s)]
+        #new_clusters = [np.random.randint(0, k, np.int32(np.random.normal(loc=r, scale=r/5))) for i in range(s)]        
         for c in new_clusters:
             dG[np.ix_(c,c)] = True
         np.fill_diagonal(dG, 0)

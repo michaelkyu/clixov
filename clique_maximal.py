@@ -465,7 +465,11 @@ def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
         # if verbose:
         #     print indent, 'v:', v, 'H to curr:', HI[HS[v] : curr]
         #     print indent, 'v:', v, 'H to end:', HI[HS[v] : HE[v]]
-                    
+
+    ## TODO: 
+    ## Need to make sure we have an edge cover
+    ## Iterate across all edges between removed nodes and see if any edge has been left out?
+    
     branches = P[Tbuf[P]]
 
     # if verbose:

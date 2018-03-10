@@ -39,17 +39,17 @@ def swap_pos(PX, pos, w, PX_idx):
     pos[w], pos[b] = PX_idx, pos_w
 
 @jit(nopython=True, cache=cache)
-def update_cliques(cliques, cliques_indptr, cliques_n, R):
-    new_cliques_end = cliques_indptr[cliques_n] + R.size
-    if new_cliques_end > cliques.size:
-        cliques = np.concatenate((cliques, np.empty(max(new_cliques_end - cliques.size, 2 * cliques.size), cliques.dtype)))
-    new_cliques_n = cliques_n + 1
-    if cliques_n > cliques_indptr.size - 2:
-        cliques_indptr = np.concatenate((cliques_indptr, np.empty(max(new_cliques_n - (cliques_indptr.size-1), 2 * cliques_indptr.size), np.int32)))
+def update_cliques(C, CP, CN, R):    
+    next_CP = CP[CN] + R.size
+    if next_CP > C.size:
+        C = np.concatenate((C, np.empty(max(next_CP - C.size, 2 * C.size), C.dtype)))
+    new_CN = CN + 1
+    if CN > CP.size - 2:
+        CP = np.concatenate((CP, np.empty(max(new_CN - (CP.size-1), 2 * CP.size), np.int32)))
         
-    cliques[cliques_indptr[cliques_n]: new_cliques_end] = R
-    cliques_indptr[new_cliques_n] = cliques_indptr[cliques_n] + R.size
-    return cliques, cliques_indptr, new_cliques_n
+    C[CP[CN]: next_CP] = R
+    CP[new_CN] = CP[CN] + R.size
+    return C, CP, new_CN
 
 @jit(nopython=True, cache=cache)
 def move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
@@ -147,6 +147,23 @@ def move_PX_fast_bool(GI, GS, GE, in_P, v):
     G_tmp = GI[GS[v] : GE[v]]
     for w_i in range(G_tmp.size):
         if in_P[G_tmp[w_i]]:
+            G_tmp[curr], G_tmp[w_i] = G_tmp[w_i], G_tmp[curr]
+            curr += 1
+    return curr, GS[v] + curr
+
+@jit(nopython=True, cache=cache)
+def move_PX_fast_bool_unused(GI, GS, GE, in_P, used, v):
+    """Assumes X is not used, and that all v from GS to GE must be
+    traversed"""
+    
+    # Move P and X to the bottom
+    curr = 0
+    G_tmp = GI[GS[v] : GE[v]]
+    used_v = used[:,v]
+    used_v_T = used[v,:]
+    for w_i in range(G_tmp.size):
+        w = G_tmp[w_i]
+        if in_P[w] and (not used_v[w]) and (not used_v_T[w]):
             G_tmp[curr], G_tmp[w_i] = G_tmp[w_i], G_tmp[curr]
             curr += 1
     return curr, GS[v] + curr
