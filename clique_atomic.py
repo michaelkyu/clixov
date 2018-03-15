@@ -1,4 +1,5 @@
 import numpy as np
+import numpy.random
 from numba import jit
 
 from constants import cache
@@ -31,6 +32,11 @@ def initialize_structures(k, PX=None):
 
     return PX, pos, R, R_end, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, tree
 
+
+@jit(nopython=True, cache=cache)
+def trim_cliques(cliques, cliques_indptr, cliques_n):
+    return cliques[:cliques_indptr[cliques_n]], cliques_indptr[:cliques_n+1], cliques_n
+
 @jit(nopython=True, cache=cache)
 def swap_pos(PX, pos, w, PX_idx):
     pos_w = pos[w]
@@ -57,6 +63,7 @@ def move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
     for w_i in range(GS[v], GE[v]):
         w = GI[w_i]
         w_pos = pos[w]
+        #print '\t', 'w, w_pos, w_i:', w, w_pos, w_i
         if w_pos < oldPS or w_pos >= oldXE:
             break
         elif PS <= w_pos and w_pos < XE:
@@ -227,6 +234,9 @@ def update_P(GI, GS, GE, PX, old_sep, sep, pos, v):
 @jit(nopython=True, cache=cache)
 def reduce_G(GI, GS, GE,
              PXbuf, core_nums, core_bound, PX, pos, sep):
+    ### Modifies GE[u] through move_PX_fast_bool
+    ### 
+    
     changed = False
     for u in PX[ : sep]:
         if core_nums[u] < core_bound:
@@ -242,3 +252,62 @@ def reduce_G(GI, GS, GE,
             u_degree, GE[u] = move_PX_fast_bool(GI, GS, GE, PXbuf, u)
         PXbuf[P] = False
     return sep, P
+
+@jit(nogil=True)
+def get_unique_cliques_exact(C, CP, CN):
+    # Filter for a set of unique cliques. Slow implementation because
+    # cannot converts numpys into tuples using nopython=True mode.
+    
+    n = (CP[1:] - CP[:-1]).max()
+    D, DP, DN = np.empty(n, C.dtype), np.zeros(n, C.dtype), 0
+
+    unique_cliques = set()
+    for r_i in range(CN):
+        r = C[CP[r_i]:CP[r_i+1]]
+        r = r.copy()
+        r.sort()        
+        r_tup = tuple(r)
+        if r_tup not in unique_cliques:
+            unique_cliques.add(r_tup)
+            D, DP, DN = update_cliques(D, DP, DN, r)
+        
+    D, DP, DN = trim_cliques(D, DP, DN)
+    return D, DP, DN
+
+@jit(nopython=True, cache=cache)
+def get_unique_cliques(C, CP, CN, n):
+    # Filter for a set of unique cliques. Fast implementation using
+    # randomized algorithm for computing a hash for each clique. Has
+    # small chance of failing because of colliding hashes
+
+    # if n is None:
+    #     n = C.max() + 1
+    key = np.random.random(n)
+    D, DP, DN = np.empty(n, C.dtype), np.zeros(n, C.dtype), 0
+
+#    print key
+    hash_table = np.empty(CN, np.float64)
+    for r_i in range(CN):
+        r = C[CP[r_i]:CP[r_i+1]]
+        r_hash = 0
+        for rr in r:
+#            print rr, key.size
+            r_hash += key[rr]
+#        print r, r_hash
+        hash_table[r_i] = r_hash
+    hash_table_idx = np.argsort(hash_table)
+
+    # print 'key:', key
+    # print 'CN:', CN, hash_table
+    if CN > 0:
+        i = hash_table_idx[0]
+        D, DP, DN = update_cliques(D, DP, DN, C[CP[i]:CP[i+1]])
+
+    for ii in range(1, CN):
+        i = hash_table_idx[ii]
+        j = hash_table_idx[ii-1]
+        if hash_table[i]!=hash_table[j]:
+            D, DP, DN = update_cliques(D, DP, DN, C[CP[i]:CP[i+1]])
+        
+    D, DP, DN = trim_cliques(D, DP, DN)
+    return D, DP, DN, key

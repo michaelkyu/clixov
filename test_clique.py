@@ -7,6 +7,9 @@ import clixov_utils
 import clique_maximal
 import clique_maximum
 import clique_maxcover
+import clique_maxcover_bf
+import clique_maxcover_df
+from clixov_utils import sparse_str, sparse_str_I
 from constants import cache
 
 def test_clique_maximal(method, k, r, s, check=True):
@@ -23,17 +26,26 @@ def test_clique_maximal(method, k, r, s, check=True):
         print 'Alternative Time:', time.time() - start
         assert set(tmp1) == set(tmp2)    
 
-def test_clique_maximal_new(method, k, r, s, check=True):
-    G, dG = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
+def test_clique_maximal_new(method, k, r, s, seed=None, check=True):
+    G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=False)
+    print 'G edges:', G.sum()/2, float(G.sum()) / (G.shape[0] * (G.shape[0]-1))
+    print 'dG edges:', dG.sum()/2, float(dG.sum()) / (G.shape[0] * (G.shape[0]-1))
+    import sys
+    sys.stdout.flush()
+    
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree_size = clique_maximal.BK_dG_py(G, dG)
+    cliques, cliques_indptr, cliques_n, tree = clique_maximal.BK_dG_py(G, dG)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
+        start = time.time()
         tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G + dG, dG, input_fmt='matrix')
+        print 'Alternative time:', time.time() - start
         assert set(tmp1) == set(tmp2)
+
+    return cliques, tree
 
 def test_clique_maximal_hier_new(method, k, r, s, check=True):
     G, dG = get_test_new_network(method, k=k, r=r, s=s, verbose=False)
@@ -75,22 +87,43 @@ def test_clique_maximum(method, k, r, s, seed=None, verbose=False, check=True):
 
         print '%s cliques of size %s' % (len(tmp1), len(tmp1[0]))
 
-def test_clique_maxcover_new(method, k, r, s, seed=None, maxcover_method='BK_dg_cover', verbose=False, check=True):
-    G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=verbose)
-    print 'G edges:', G.sum()/2
-    print 'dG edges:', dG.sum()/2
+def test_clique_maxcover_new(method, k, r, s, new_ratio=None, seed=None, maxcover_method='BK_dg_cover', verbose=False, check=True):
+    G, dG = get_test_new_network(method, k=k, r=r, s=s, new_ratio=new_ratio, seed=seed, verbose=verbose)
+    print 'G edges:', G.sum()/2, float(G.sum()) / (G.shape[0] * (G.shape[0]-1))
+    print 'dG edges:', dG.sum()/2, float(dG.sum()) / (G.shape[0] * (G.shape[0]-1))
     start = time.time()
+    
     if maxcover_method=='BK_dg_cover':
-        cliques, cliques_indptr, cliques_n, tree_size = clique_maxcover.BK_dG_cover_py(G, dG)
+        cliques, cliques_indptr, cliques_n, tree = clique_maxcover_df.BK_dG_cover_py(G, dG)        
+        #print 'cliques:', sparse_str_I(cliques, cliques_indptr[:-1], cliques_indptr[1:])
         cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
-        keep, tree = None, None
+        keep = None
     elif maxcover_method=='MC_bf_cover_py':
-        cliques, keep, tree = clique_maxcover.MC_bf_cover_py(csr_matrix(dG), csr_matrix(dG + G))
+        cliques, keep, tree = clique_maxcover_bf.MC_bf_cover_py(csr_matrix(dG), csr_matrix(dG + G))
     else:
         raise Exception('Unsupported method')
     print 'Time:', time.time() - start
+
+    print 'Tree:', tree.shape
     
+    # print 'cliques:'
+    # print cliques.toarray()
+    # print sparse_str(dG)
+    
+    unexplained = clixov_utils.get_unexplained_edges(cliques, dG)
+    print 'Unexplained edges:', zip(*unexplained.nonzero())
+
     cover_idx = clixov_utils.get_largest_clique_covers(cliques, dG)
+            
+    # try:
+    #     cover_idx = clixov_utils.get_largest_clique_covers(cliques, dG)
+    # except:
+    #     print 'Error'
+    #     unexplained = clixov_utils.get_unexplained_edges(cliques, dG)
+    #     print zip(*unexplained.nonzero())
+    #     print type(cliques), type(dG), type(G)
+    #     return cliques, dG, G
+    
     cliques = cliques[:,cover_idx]
 
     # from clixov_utils import as_dense_flat
@@ -175,6 +208,7 @@ def get_test_new_network(method,
                          k=None,
                          r=None,
                          s=None,
+                         new_ratio=0.5,
                          p=0.5,
                          n=None,
                          seed=None,
@@ -223,21 +257,31 @@ def get_test_new_network(method,
         for c in new_clusters:
             dG[np.ix_(c,c)] = True
         np.fill_diagonal(dG, 0)
-        
-        dG -= (dG * G)
-        G, dG = csc_matrix(G), csc_matrix(dG)        
     elif method=='erdos':
         G = np.zeros((k,k), dtype=np.bool, order='F')
-        G[np.random.randint(0, k, k * r), np.random.randint(0, k, k * r)] = True
+        np.random.seed(seed)
+        tmp = np.random.randint(0, k, k * r * 2)
+        tmp_0, tmp_1 = np.split(tmp, 2)
+        G[tmp_0, tmp_1] = True
+        #G[np.random.randint(0, k, k * r), np.random.randint(0, k, k * r)] = True
         G = np.logical_or(G, G.T)
         np.fill_diagonal(G, 0)
-        G = G.astype(np.bool, order='F')
-
-        dG = G.copy()
-        dG.data[np.random.random(G.data.size) < p] = 0
-        dG.eliminate_zeros()
-        dG = csc_matrix((dG.T.toarray() * dG.toarray()))
-        G = csc_matrix(G.toarray() & ~ dG.toarray())
+        #print G.toarray()
+                
+        dG = np.zeros((k,k), dtype=np.bool, order='F')
+        np.random.seed(seed+1)
+        tmp = np.random.randint(0, k, k * r * 2)
+        tmp_0, tmp_1 = np.split(tmp, 2)
+        dG[tmp_0, tmp_1] = True
+        dG = np.logical_or(dG, dG.T)
+        np.fill_diagonal(dG, 0)
+        
+        # dG = G.copy()
+        #dG.data[np.random.random(G.data.size) < p] = 0
+        #dG.eliminate_zeros()
+        
+        # dG = csc_matrix((dG.T.toarray() * dG.toarray()))
+        # G = csc_matrix(G.toarray() & ~ dG.toarray())
     elif method=='hierarchy':
         edges, H = generate_hierarchy(n, p, r, seed=seed)
 
@@ -253,7 +297,24 @@ def get_test_new_network(method,
         
     else:
         raise Exception('Unsupported method')
-    
+
+
+    if new_ratio is None:
+        dG -= (dG * G)
+    else:
+        intersect = (dG * G).nonzero()
+        tmp = intersect[0] < intersect[1]
+        intersect = intersect[0][tmp], intersect[1][tmp]
+        tmp = np.random.random(intersect[0].size) >= new_ratio
+        move_to_G = intersect[0][tmp], intersect[1][tmp]
+        move_to_dG = intersect[0][~tmp], intersect[1][~tmp]        
+        G[move_to_dG] = 0
+        G[move_to_dG[1], move_to_dG[0]] = 0
+        dG[move_to_G] = 0
+        dG[move_to_G[1], move_to_G[0]] = 0
+
+    G, dG = csc_matrix(G), csc_matrix(dG)
+
     assert dG.sum() > 0
     assert (dG.multiply(G)).sum() == 0
         

@@ -360,7 +360,7 @@ def get_thresholds_symm(A, beta):
 
 def calc_and_do_merge(X_sp, X, GX, G, beta,
                       prev_merge,
-                      H=None, dG=None):
+                      H=None, dG=None, debug=False):
     assert H is not None
     H = csr_matrix(H.T)
 
@@ -385,13 +385,13 @@ def calc_and_do_merge(X_sp, X, GX, G, beta,
 
     start = time.time()
     #dX = do_merge(X_sp, i_merge, j_merge, prev_merge_i, prev_merge_j, H=H)
-    dX = do_merge(X_sp, meta_dG, notest, H=H)
+    dX = do_merge(X_sp, meta_dG, notest, H=H, debug=debug)
     print 'do_merge time:', time.time() - start
 
     return dX, meta_dG
 
 #def do_merge(X, i_merge, j_merge, prev_merge_i, prev_merge_j, H=None):
-def do_merge(X, dG, G, H=None):
+def do_merge(X, dG, G, H=None, debug=False):
     n = X.shape[1]
 
     # dG = coo_matrix((np.ones(2 * i_merge.size, np.int32),
@@ -419,10 +419,11 @@ def do_merge(X, dG, G, H=None):
         ## Only going to look at new edges between highest level nodes in current hierarchy
         tmp = dot(dot(H.T, dG) > 0, H) > 0
         tmp2 = dG.multiply(tmp) > 0
+        assert elt_multiply(tmp2, tmp2.T).sum() == tmp2.sum()
         print '\t', 'Transferred from dG to G:', tmp2.sum()
         start = time.time()
         C, CP, CN, tree = clique_maximal.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
-        print '\t', 'Search tree nodes / time:', tree.size, time.time() - start
+        print '\t', 'Clique search tree nodes / time:', tree.size, time.time() - start
         cliques_csc = cliques_to_csc(C, CP, CN, n)
         assert_unique_cliques(cliques_csc)
         print '\t', 'Meta cliques:', cliques_csc.shape[1], clixov_utils.format_clique_sizes(cliques_csc)
@@ -430,6 +431,11 @@ def do_merge(X, dG, G, H=None):
         cliques_csc_list.append(cliques_csc)
         cliques_csc_trans = cliques_csc + (dot(H.T, cliques_csc) > 0).astype(cliques_csc.dtype)
 
+        if debug:
+            import cPickle
+            with open('tmp.%s.pkl' % it, 'wb') as f:
+                cPickle.dump((G, dG, H), f, protocol=cPickle.HIGHEST_PROTOCOL)
+                         
         # if G.sum() >= 348440:
         #     import cPickle
         #     with open('tmp.npy', 'wb') as f:
@@ -488,21 +494,3 @@ def do_merge(X, dG, G, H=None):
     
     return merge
 
-def get_unexplained_edges(X, G):
-    """Return a gene-by-gene boolean matrix with 1 indicating that the
-       gene pair is in a clique.
-
-       X : gene-by-clique matrix
-       G : gene-by-gene adjacency matrix
-    """
-    Y = dot(X, X.T)
-    if issparse(Y):
-        Y.data = (Y.data > 0).astype(X.dtype)
-        # fill_diagonal(Y, 0)
-        remove_diagonal(Y)
-    else:
-        Y = (Y > 0).astype(X.dtype)
-        fill_diagonal(Y, 0)
-
-    Y = G - elt_multiply(G, Y)
-    return Y

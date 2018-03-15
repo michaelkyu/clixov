@@ -1,18 +1,14 @@
 import time
 import numpy as np
 import scipy.sparse
-from scipy.sparse import isspmatrix, isspmatrix_csc, isspmatrix_csr, csc_matrix, csr_matrix
+from scipy.sparse import isspmatrix, isspmatrix_csc, isspmatrix_csr, csc_matrix, csr_matrix, issparse, coo_matrix
 from collections import OrderedDict, Counter
 
-from mkl_spgemm import dot
+from mkl_spgemm import dot, elt_multiply
 
 from numba import jit
 
 from constants import cache
-
-@jit(nopython=True, cache=cache)
-def trim_cliques(cliques, cliques_indptr, cliques_n):
-    return cliques[:cliques_indptr[cliques_n]], cliques_indptr[:cliques_n+1], cliques_n
         
 def as_dense_array(X, order=None):
     if isspmatrix(X):
@@ -42,48 +38,57 @@ def tuples_to_csc(cliques, n, dtype=None):
         return csc_matrix((np.ones(indices.size, np.int32), indices, indptr),
                           (n, len(cliques)), dtype=dtype)
 
-def adjacency_to_edges_mat(G):
+def adjacency_to_edges_mat(G, upper_right=True):
     assert isspmatrix_csc(G)
-    
-    G = G.copy()
-    G.data[G.indices < np.repeat(np.arange(G.shape[1]), G.indptr[1:] - G.indptr[:-1])] = 0
-    G.eliminate_zeros()
+
+    if upper_right:
+        G = G.copy()
+        G.data[G.indices < np.repeat(np.arange(G.shape[1]), G.indptr[1:] - G.indptr[:-1])] = 0
+        G.sort_indices()
+        G.eliminate_zeros()
     
     indices = np.empty(2 * G.indices.size, np.int32)
     indices[::2] = G.indices
     indices[1::2] = np.repeat(np.arange(G.shape[1]), as_dense_flat(G.sum(0)).astype(indices.dtype))
     indptr = np.arange(0, 2 * G.indices.size + 2, 2)
     edges_mat = csc_matrix((np.ones(indices.size, G.dtype), indices, indptr),
-                       (G.shape[0], G.indices.size))
+                           (G.shape[0], G.indices.size))
     edges_mat.sort_indices()
     return edges_mat
     
-def get_largest_clique_covers(cliques, G):    
+def get_largest_clique_covers(cliques, G, ret_edges=False):    
     # Check symmetry
     assert G.multiply(G.T).sum() == G.sum()
     
-    # Take upper-right triangle
-    G = G.copy()
-    G.data[G.indices < np.repeat(np.arange(G.shape[1]), G.indptr[1:] - G.indptr[:-1])] = 0
-    G.sort_indices()
-    G.eliminate_zeros()
-    
     edges_mat = adjacency_to_edges_mat(G)
+    # print edges_mat.shape
+    # print edges_mat.toarray().astype(np.int32)
     cluster_to_edges = dot(cliques.T, edges_mat)
     cluster_to_edges.data = cluster_to_edges.data == 2
     cluster_to_edges.eliminate_zeros()
     
     cluster_sizes = as_dense_flat(cliques.sum(0))
     covers_to_edges = csc_matrix(cluster_to_edges)
+    max_covers = np.zeros(covers_to_edges.shape[1], np.int32)
     for i in range(covers_to_edges.shape[1]):
         cluster_idx = covers_to_edges.indices[covers_to_edges.indptr[i] : covers_to_edges.indptr[i+1]]
         cluster_data = covers_to_edges.data[covers_to_edges.indptr[i] : covers_to_edges.indptr[i+1]]
-        assert cluster_idx.size > 0, i
+        assert cluster_idx.size > 0, ('No cover for edge index %s:' % i)
         c = cluster_sizes[cluster_idx]
         cluster_data[c < c.max()] = 0
+        max_covers[i] = c.max()
     covers_to_edges.eliminate_zeros()
-    
-    return (covers_to_edges.sum(1) > 0).nonzero()[0]
+
+    if ret_edges:
+        # Also return the edges indices and their max covers
+        cover_G = coo_matrix((max_covers, (edges_mat.indices[::2], edges_mat.indices[1::2])), shape=G.shape)
+        cover_G += cover_G.T
+        cover_G = csc_matrix(cover_G)
+        #cover_G[edges_mat.indices[::2], edges_mat.indices[1::2]] = max_covers
+        return (covers_to_edges.sum(1) > 0).nonzero()[0], cover_G
+    else:
+        # Just return the indices of cliques to keep as max covers
+        return (covers_to_edges.sum(1) > 0).nonzero()[0]
 
 def get_largest_cliques(cliques):
     cliques_sizes = as_dense_flat(cliques.sum(0))
@@ -170,8 +175,28 @@ def assert_clique(clique, G):
     total = (clique.size * (clique.size-1)) / 2
     assert edges == total, 'Edges: %s, Possible: %s' % (edges, total)
 
-from numba import jit
-
+def assert_cliques(cliques, G):
+    if issparse(G):
+        G = G.toarray()
+    G = np.ascontiguousarray(G)
+    
+    for i in range(cliques.shape[1]):
+        c = cliques[:,i].nonzero()[0]
+        try:
+            assert G[c,:][:,c].sum() == c.size * (c.size-1)
+        except:
+            print 'Not a clique:'
+            print c.tolist()
+            print G[c,:][:,c]
+            raise        
+        extra = as_dense_flat(G[c,:].sum(0)==c.size).nonzero()[0]
+        try:
+            assert extra.size == 0
+        except:
+            print 'Not a maximal clique:'
+            print c.tolist(), 'extra:', extra
+            raise
+        
 @jit(nopython=True, cache=cache)
 def remove_diagonal_nb(data, indices, indptr):
     ## Assumes well formatted sparse matrix with sorted indices
@@ -270,3 +295,58 @@ def assert_unique_cliques(cliques):
 
 def get_clique_sizes(X):
     return as_dense_flat(X.sum(0))
+
+@jit(nopython=True)
+def infer_children(parents):
+    children = np.zeros(parents.size, parents.dtype)
+    depths = np.zeros(parents.size, np.int32)
+    depths[:2] = -1
+    for v_i in range(parents.size):
+        children[parents[v_i]] = v_i
+        depths[v_i] = depths[parents[v_i]] + 1
+    return children, depths
+
+def print_tree_indent(tree, width=5):
+    parents = tree[0,:]
+    branches = tree[1,:]
+    returns = tree[2,:]
+    children, depths = infer_children(parents)
+
+    indent = '-'
+    curr_line = ''
+    for v_i in range(1, parents.size):
+        parent = parents[v_i]
+        branch = branches[v_i]
+        depth = depths[v_i]
+        ret = returns[v_i]
+
+        if ret==0:
+            block = ('%s *' % (branch)).ljust(width)
+        else:
+            block = ('%s' % (branch)).ljust(width)
+        
+        if parent == v_i - 1:
+            curr_line += block
+        else:
+            print curr_line
+            curr_line = ' ' * (width * (depth-2)) + block
+    print curr_line
+    
+def get_unexplained_edges(X, G):
+    """Return a gene-by-gene boolean matrix with 1 indicating that the
+       gene pair is in a clique.
+
+       X : gene-by-clique matrix
+       G : gene-by-gene adjacency matrix
+    """
+    Y = dot(X, X.T)
+    if issparse(Y):
+        Y.data = (Y.data > 0).astype(X.dtype)
+        # fill_diagonal(Y, 0)
+        remove_diagonal(Y)
+    else:
+        Y = (Y > 0).astype(X.dtype)
+        fill_diagonal(Y, 0)
+
+    Y = G - elt_multiply(G, Y)
+    return Y
