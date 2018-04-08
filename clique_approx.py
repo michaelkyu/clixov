@@ -546,7 +546,7 @@ def MC_cover_approx_py(G, dG, verbose=False):
     unexplained = clixov_utils.get_unexplained_edges(cliques, dG)
     print 'Unexplained edges:', zip(*unexplained.nonzero())
 
-    cliques_idx, cover_G = get_largest_clique_covers(cliques, dG, ret_edges=True)
+    cliques_idx, cover_G = get_largest_clique_covers(cliques, dG, ret_edges=True, assert_covered=False)
 
     print 'stats:', stats[0]
     

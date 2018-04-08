@@ -9,13 +9,14 @@ import clique_maximum
 import clique_maxcover
 import clique_maxcover_bf
 import clique_maxcover_df
+import clique_maximal_dG_improv
 from clixov_utils import sparse_str, sparse_str_I
 from constants import cache
 
-def test_clique_maximal(method, k, r, s, check=True):
+def test_clique_maximal(method, k, r, s, check=True, par=False):
     G = get_test_network(method, k=k, r=r, s=s)
     start = time.time()
-    cliques, cliques_indptr, cliques_n = clique_maximal.BK_py(G)
+    cliques, cliques_indptr, cliques_n = clique_maximal.BK_py(G, par=par)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
@@ -26,24 +27,38 @@ def test_clique_maximal(method, k, r, s, check=True):
         print 'Alternative Time:', time.time() - start
         assert set(tmp1) == set(tmp2)    
 
-def test_clique_maximal_new(method, k, r, s, seed=None, check=True):
+def test_clique_maximal_new(method, k, r, s, seed=None, clique_method='BK_dG_py', check=True):
     G, dG = get_test_new_network(method, k=k, r=r, s=s, seed=seed, verbose=False)
     print 'G edges:', G.sum()/2, float(G.sum()) / (G.shape[0] * (G.shape[0]-1))
     print 'dG edges:', dG.sum()/2, float(dG.sum()) / (G.shape[0] * (G.shape[0]-1))
     import sys
     sys.stdout.flush()
+    print 'G:'
+    print G.toarray()
+    print 'dG:'
+    print dG.toarray()
     
     start = time.time()
-    cliques, cliques_indptr, cliques_n, tree = clique_maximal.BK_dG_py(G, dG)
+    if clique_method=='BK_dG_py':
+        cliques, cliques_indptr, cliques_n, tree = clique_maximal.BK_dG_py(G, dG)
+    elif clique_method=='BK_dG_py_improv':
+        cliques, cliques_indptr, cliques_n, tree = clique_maximal_dG_improv.BK_dG_py(G, dG)
     print 'Time:', time.time() - start
     cliques = clixov_utils.cliques_to_csc(cliques, cliques_indptr, cliques_n, G.shape[0])
 
     if check:
         tmp1 = clixov_utils.csc_to_cliques_list(cliques)
         start = time.time()
-        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G + dG, dG, input_fmt='matrix')
+        tmp2 = clique_maximal.get_cliques_igraph(G.shape[0], G + dG, dG=dG, input_fmt='matrix')
         print 'Alternative time:', time.time() - start
-        assert set(tmp1) == set(tmp2)
+
+        try:
+            assert set(tmp1) == set(tmp2)
+        except:
+            print 'Shared:', sorted(set(tmp1) & set(tmp2))
+            print 'Uniquely found:', sorted(set(tmp1) - set(tmp2))
+            print 'Not found:', sorted(set(tmp2) - set(tmp1))
+            raise Exception('Did not find the same cliques as reference method')
 
     return cliques, tree
 

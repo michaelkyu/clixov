@@ -411,9 +411,10 @@ def do_merge(X, dG, G, H=None, debug=False):
 
     ngenes = X.shape[0]
     orig_dG_genes = dG[:ngenes,:ngenes]
-            
+    do_all = False
+    
     while dG.sum() > 0:
-        print 'Iteration:', it, 'G/dG sum:', G.sum(), dG.sum()
+        print 'Iteration:', it, 'G/dG/H sum:', G.sum() /2, dG.sum()/2, H.sum(), 'do_all:', do_all
         
         ## This transfer from dG to G should only occur temporarily within each iteration
         ## Only going to look at new edges between highest level nodes in current hierarchy
@@ -422,14 +423,34 @@ def do_merge(X, dG, G, H=None, debug=False):
         assert elt_multiply(tmp2, tmp2.T).sum() == tmp2.sum()
         print '\t', 'Transferred from dG to G:', tmp2.sum()
         start = time.time()
-        C, CP, CN, tree = clique_maximal.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
+
+        if do_all:
+            C, CP, CN, tree = clique_maximal.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
+            # print '\t', 'expt2'
+            # import clique_maximal_expt2
+            # C, CP, CN, tree = clique_maximal_expt2.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
+        else:
+            import clique_maximal_expt
+            C, CP, CN, tree = clique_maximal_expt.BK_hier_dG_py(G + tmp2, dG - tmp2, H)
+        
         print '\t', 'Clique search tree nodes / time:', tree.size, time.time() - start
         cliques_csc = cliques_to_csc(C, CP, CN, n)
         assert_unique_cliques(cliques_csc)
         print '\t', 'Meta cliques:', cliques_csc.shape[1], clixov_utils.format_clique_sizes(cliques_csc)
 
+
         cliques_csc_list.append(cliques_csc)
         cliques_csc_trans = cliques_csc + (dot(H.T, cliques_csc) > 0).astype(cliques_csc.dtype)
+
+        ## List the temporary max covers found
+        merge = dot(X, cliques_csc)
+        if issparse(merge):
+            merge.data = (merge.data > 0).astype(X.dtype)
+            merge.eliminate_zeros()
+        else:
+            merge = (merge > 0).astype(X.dtype)
+        idx = get_largest_clique_covers(merge, dG[:ngenes,:ngenes], assert_covered=False)
+        print '\t', 'Merge cliques (cover):', merge.shape[1], clixov_utils.format_clique_sizes(merge)
 
         if debug:
             import cPickle
@@ -444,12 +465,18 @@ def do_merge(X, dG, G, H=None, debug=False):
             
         unexplained = get_unexplained_edges(cliques_csc_trans, dG)
         print '\t', 'Unexplained meta edges:', unexplained.sum()
-        
+
+        do_all = True
+            
         if last_unexplained == unexplained.sum():
-            import cPickle
-            with open('tmp.npy', 'wb') as f:
-                cPickle.dump((G, dG, H), f)
-            raise
+            raise Exception('No new edges were explained')
+            # print '\t', '*** No more new edges were explained ***'
+            # do_all = True
+                
+            # import cPickle
+            # with open('tmp.npy', 'wb') as f:
+            #     cPickle.dump((G, dG, H), f)
+            # raise
         last_unexplained = unexplained.sum()
 
         G += dG - unexplained

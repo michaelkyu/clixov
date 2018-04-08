@@ -166,7 +166,7 @@ def MC_py(G, max_cover=0, offset=0, verbose=False):
     
     ## Degeneracy
     GS, GE, GI = G.indptr[:-1].copy(), G.indptr[1:].copy(), G.indices.copy()
-    degen_order, core_num = get_degeneracy(GI, GS, GE,
+    degen_order, core_num, _ = get_degeneracy(GI, GS, GE,
                                            np.arange(G.shape[0]).astype(np.int32))
     if verbose:
         print 'degen_order/core_num:', zip(degen_order, core_num)
@@ -212,9 +212,7 @@ def MC_py(G, max_cover=0, offset=0, verbose=False):
         max_cover,
         C, CP, CN, core_num, core_num2,
         tree, offset=offset, verbose=verbose)
-    
-    if verbose:
-        print 'Time:', time.time() - start_time
+    print 'MC time:', time.time() - start_time
     
     tree = tree[:,:tree[0,0]+1]
     

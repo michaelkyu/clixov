@@ -56,7 +56,7 @@ def adjacency_to_edges_mat(G, upper_right=True):
     edges_mat.sort_indices()
     return edges_mat
     
-def get_largest_clique_covers(cliques, G, ret_edges=False):    
+def get_largest_clique_covers(cliques, G, ret_edges=False, assert_covered=True):
     # Check symmetry
     assert G.multiply(G.T).sum() == G.sum()
     
@@ -73,10 +73,14 @@ def get_largest_clique_covers(cliques, G, ret_edges=False):
     for i in range(covers_to_edges.shape[1]):
         cluster_idx = covers_to_edges.indices[covers_to_edges.indptr[i] : covers_to_edges.indptr[i+1]]
         cluster_data = covers_to_edges.data[covers_to_edges.indptr[i] : covers_to_edges.indptr[i+1]]
-        assert cluster_idx.size > 0, ('No cover for edge index %s:' % i)
-        c = cluster_sizes[cluster_idx]
-        cluster_data[c < c.max()] = 0
-        max_covers[i] = c.max()
+        if assert_covered:
+            assert cluster_idx.size > 0, ('No cover for edge index %s:' % i)
+        if cluster_idx.size > 0:
+            c = cluster_sizes[cluster_idx]
+            cluster_data[c < c.max()] = 0
+            max_covers[i] = c.max()
+        else:
+            max_covers[i] = 2
     covers_to_edges.eliminate_zeros()
 
     if ret_edges:
@@ -301,8 +305,9 @@ def infer_children(parents):
     children = np.zeros(parents.size, parents.dtype)
     depths = np.zeros(parents.size, np.int32)
     depths[:2] = -1
+#    print 'asdf'
     for v_i in range(parents.size):
-        children[parents[v_i]] = v_i
+        children[parents[v_i]] += 1
         depths[v_i] = depths[parents[v_i]] + 1
     return children, depths
 

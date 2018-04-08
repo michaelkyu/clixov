@@ -62,6 +62,11 @@ def recompute_min_cover_within(dGI, dGS, dGE, PX, pos, PS, sep, XE):
     return min_cover_within
 
 def BK_dG_cover_py(G, dG, PX=None, degeneracy=True, max_branch_depth=100000, approx=True):
+    """
+    G : old edges
+    dG : new edges
+    """
+    
     assert G.shape == dG.shape
     k = G.shape[0]
     PX, pos, R, RE, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, _ = initialize_structures(k, PX=PX)

@@ -2,7 +2,7 @@ import time
 import igraph
 import numpy as np
 from clique_atomic import *
-from constants import cache
+from constants import cache, parallel
 
 debug = False
 
@@ -12,8 +12,108 @@ debug = False
 interest = []
 
 
+from numba import prange
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=True)
+def BK_par(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
+       GS, GE, GI, Tbuf, depth,
+       C, CP, CN):
+    R = Rbuf[:RE]    
+    P, X = PX[PS:sep], PX[sep:XE]
+    
+#     indent = '\t' * depth
+#     print indent, 'DEPTH:', depth
+#     print indent, 'PX:', PX
+#     print indent, 'PS:', PS, 'XE:', XE, 'oldPS:', oldPS, 'oldXE:', oldXE, 'sep:', sep
+#     print indent, 'R:', R, 'P:', P, 'X:', X    
+    
+    if P.size==0:
+        if X.size==0:
+            C, CP, CN = update_cliques(C, CP, CN, R)
+        return C, CP, CN
+
+    u = -1
+    max_degree = -1
+    for v in PX[PS:XE]:
+        v_degree, curr = move_PX(GI, GS, GE,
+                                 pos, oldPS, oldXE, PS, XE, sep, 0, v, GS[v])                
+        if v_degree > max_degree:
+            max_degree, u, u_curr = v_degree, v, curr
+
+    Padj_u = pos[GI[GS[u] : u_curr]]
+    Tbuf[Padj_u] = False
+    branches = P[Tbuf[PS:sep]]
+    Tbuf[Padj_u] = True
+    
+    if depth==0:        
+#        C_list = []
+        for v_i in prange(branches.size):
+            v = branches[v_i]
+
+            C2, CP2, CN2 = C.copy(), CP.copy(), CN
+            PX2, pos2 = PX.copy(), pos.copy()
+            Rbuf2, Tbuf2 = Rbuf.copy(), Tbuf.copy()
+            RE2, sep2, PS2, XE2, oldPS2, oldXE2 = oldPS, oldXE, PS, XE, sep, RE
+            
+            for v_ii in range(v_i):
+                sep2 -= 1
+                swap_pos(PX2, pos2, branches[v_ii], sep2)
+            
+            new_PS, new_XE = update_PX(GI, GS, GE, oldPS2, oldXE2, PS2, XE2, sep2, PX2, pos2, v, sep2, sep2)            
+            Rbuf2[RE2] = v
+
+            # GI2, GS2, GE2 = GI.copy(), GS.copy(), GE.copy()
+                        
+            GS2, GE2 = GS.copy(), GE.copy()
+            tmp = PX2[new_PS:new_XE]
+            size = 0
+            for x in tmp:
+                size += GE2[x] - GS2[x]
+            # print size
+
+            if size > 0:
+                GI2 = np.empty(size, GI.dtype)
+                #GI2 = np.empty((GE2[tmp] - GS2[tmp]).sum(), GI.dtype)
+                #GI2 = np.empty(GI.size, GI.dtype)
+                #GI2 = np.empty(10, GI.dtype)
+                curr = 0
+                for x_i in range(tmp.size):
+                    x = tmp[x_i]
+                    offset = GE2[x] - GS2[x]
+                    assert curr + offset <= GI2.size
+                    GI2[curr : curr + offset] = GI[GS[x]:GE[x]]
+                    GS2[x] = curr
+                    GE2[x] = curr + offset
+                    curr += offset
+
+                C2, CP2, CN2 = BK_par(
+                    Rbuf2, RE + 1, PX2, new_PS, sep2, new_XE, PS2, XE2, pos2,
+                    GS2, GE2, GI2, Tbuf2, depth+1,
+                    C2, CP2, CN2)
+    else:
+        for v in branches:
+            new_PS, new_XE = update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, sep, sep)            
+            Rbuf[RE] = v
+
+            C, CP, CN = BK(
+                Rbuf, RE + 1, PX, new_PS, sep, new_XE, PS, XE, pos,
+                GS, GE, GI, Tbuf, depth+1,
+                C, CP, CN)
+
+            # Swap v to the end of P, and then decrement separator
+            sep -= 1
+            swap_pos(PX, pos, v, sep)
+
+                
+        # Move back all branches into P
+        for v in branches[::-1]:
+            # Move v to the beginning of X and increment separator
+            swap_pos(PX, pos, v, sep)
+            sep += 1
+    
+    return C, CP, CN        
+
+@jit(nopython=True, cache=cache, parallel=parallel)
 def BK(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
        GS, GE, GI, Tbuf, depth,
        C, CP, CN):
@@ -87,22 +187,28 @@ def BK(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
     
     return C, CP, CN        
 
-def BK_py(G, PX=None):
+def BK_py(G, PX=None, par=False):
     k = G.shape[0]
     custom_PX = PX is not None
     PX, pos, R, RE, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, tree = initialize_structures(k, PX=PX)
     if custom_PX:
         initialize_PX(G.indices, G.indptr[:-1], G.indptr[1:], pos, PX)
-    
-    C, CP, CN = BK(
-        R, RE, PX, PS, sep, XE, PS, XE, pos,
-        G.indptr[:-1], G.indptr[1:], G.indices,
-        Tbuf, 0, C, CP, CN)
+
+    if par:
+        C, CP, CN = BK_par(
+            R, RE, PX, PS, sep, XE, PS, XE, pos,
+            G.indptr[:-1], G.indptr[1:], G.indices,
+            Tbuf, 0, C, CP, CN)
+    else:
+        C, CP, CN = BK(
+            R, RE, PX, PS, sep, XE, PS, XE, pos,
+            G.indptr[:-1], G.indptr[1:], G.indices,
+            Tbuf, 0, C, CP, CN)
 
     C, CP, CN = trim_cliques(C, CP, CN)
     return C, CP, CN
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def BK_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
             GS, GE, GI, dGS, dGE, dGI,
             Tbuf, depth, C, CP, CN, stats, tree):
@@ -182,7 +288,7 @@ def BK_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
 
     return C, CP, CN, tree
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def BK_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
           GS, GE, GI, dGS, dGE, dGI,
           Tbuf, depth,
@@ -444,13 +550,15 @@ def BK_dG_py(G, dG, PX=None):
     C, CP, CN = trim_cliques(C, CP, CN)
     return C, CP, CN, tree
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
                  GS, GE, GI, dGS, dGE, dGI,
                  HS, HE, HI,
                  topo,
-                 Tbuf, depth, C, CP, CN,
+                 Fbuf, Tbuf, depth, C, CP, CN,
                  stats, tree):
+    #### TODO: find a better pivot by considering the total node degree, not just new degree
+    
     if tree.size == stats[0] + 2:
         tree = expand_1d_arr(tree)
     stats[0] += 1
@@ -483,28 +591,25 @@ def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
     # Filter branches. Follow the topological sorting, going top-down
     # the hierarchy
     for v in P[np.argsort(topo[P])]:
-        curr = HS[v]
-        for w_i in range(HS[v], HE[v]):
-            w = HI[w_i]
-            w_pos = pos[w]
-            if w_pos < oldPS or w_pos >= oldXE:
-                break
-            #elif PS <= w_pos and w_pos < XE:
-            elif PS <= w_pos and w_pos < sep:
-                HI[curr], HI[w_i] = w, HI[curr]
-                curr += 1
+        if Tbuf[v]:
+            curr = HS[v]
+            for w_i in range(HS[v], HE[v]):
+                w = HI[w_i]
+                w_pos = pos[w]
+                if w_pos < oldPS or w_pos >= oldXE:
+                    break
+                #elif PS <= w_pos and w_pos < XE:
+                elif PS <= w_pos and w_pos < sep:
+                    HI[curr], HI[w_i] = w, HI[curr]
+                    curr += 1
 
-                # Remove descendants of v from being branches
-                if Tbuf[v]:
-                    Tbuf[w] = False
+                    # Remove descendants of v from being branches
+                    if Tbuf[v]:
+                        Tbuf[w] = False
         
         # if verbose:
         #     print indent, 'v:', v, 'H to curr:', HI[HS[v] : curr]
         #     print indent, 'v:', v, 'H to end:', HI[HS[v] : HE[v]]
-
-    ## TODO: 
-    ## Need to make sure we have an edge cover
-    ## Iterate across all edges between removed nodes and see if any edge has been left out?
     
     branches = P[Tbuf[P]]
 
@@ -530,7 +635,6 @@ def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
 
     Tbuf[Padj_u] = False
     Tbuf[Padj_new_u] = False
-#    branches = P[Tbuf[PS:sep]]
     branches = branches[Tbuf[branches]]
     Tbuf[Padj_u] = True
     Tbuf[Padj_new_u] = True
@@ -565,7 +669,7 @@ def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
             dGS, dGE, dGI,
             HS, HE, HI,
             topo,
-            Tbuf, depth+1,
+            Fbuf, Tbuf, depth+1,
             C, CP, CN, stats, tree)
             
         # Swap v to the end of P, and then decrement separator
@@ -579,12 +683,12 @@ def BK_hier_Gsep(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
 
     return C, CP, CN, tree
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
                GS, GE, GI, dGS, dGE, dGI,                 
                HS, HE, HI,
                topo,
-               Tbuf, depth,
+               Fbuf, Tbuf, depth,
                btw_new, btw_stack, btw_end,
                C, CP, CN,
                stats, tree):
@@ -649,7 +753,7 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
     incd = incd[:incd_count]
     X_incd = X_incd[:X_incd_count]
 
-    is_incd = np.zeros(PX.size, np.bool_)
+    is_incd = Fbuf #np.zeros(PX.size, np.bool_)
     is_incd[incd] = True
 
     # print('incd:', incd.size)
@@ -658,25 +762,27 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
     # the hierarchy
     #for v in incd[np.argsort(topo[incd])]:
     for v in P[np.argsort(topo[P])]:
-        curr = HS[v]
-        for w_i in range(HS[v], HE[v]):
-            w = HI[w_i]
-            w_pos = pos[w]
-            if w_pos < oldPS or w_pos >= oldXE:
-                break
-            #elif PS <= w_pos and w_pos < XE:
-            elif PS <= w_pos and w_pos < sep:
-                HI[curr], HI[w_i] = w, HI[curr]
-                curr += 1
+        if Tbuf[v]:
+            curr = HS[v]
+            for w_i in range(HS[v], HE[v]):
+                w = HI[w_i]
+                w_pos = pos[w]
+                if w_pos < oldPS or w_pos >= oldXE:
+                    break
+                #elif PS <= w_pos and w_pos < XE:
+                elif PS <= w_pos and w_pos < sep:
+                    HI[curr], HI[w_i] = w, HI[curr]
+                    curr += 1
 
-                # Remove descendants of v from being branches
-                if is_incd[v] and Tbuf[v]:
-                   Tbuf[w] = False
+                    # Remove descendants of v from being branches
+                    if is_incd[v] and Tbuf[v]:
+                       Tbuf[w] = False
         
         # if verbose and curr > HS[v]:
         #     print indent, 'v:', v, 'H to curr:', HI[HS[v] : curr]
         #     print indent, 'v:', v, 'H to end:', HI[HS[v] : HE[v]]
-            
+
+    is_incd[incd] = False
     branches = incd[Tbuf[incd]]
     Tbuf[P] = True
 
@@ -694,7 +800,7 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
     max_degree = -1
     
     # Calculate new_incd := the neighbors of incd
-    is_branch = np.zeros(PX.size, np.bool_)
+    is_branch = Fbuf # np.zeros(PX.size, np.bool_)
     is_branch[branches] = True
     
     for v in incd:
@@ -727,7 +833,8 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
         if is_branch[v] and v_degree > max_degree:
             max_degree = v_degree
             u, u_curr_new, u_curr = v, curr_new, curr
-                    
+
+    is_branch[branches] = False
     Tbuf[incd] = True
     Tbuf[X_incd] = True
     new_incd = new_incd[:new_incd_end]
@@ -763,10 +870,6 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
                     break
                 Tbuf[w] = True
     branches = branches[Tbuf[branches]]
-
-#     # Alternative to setting P_btw_new to True and finding vertex cover of incd. Empirically slower
-#     tmp = new_incd[pos[new_incd] < sep]
-#     branches = np.concatenate((incd[Tbuf[incd]], tmp[Tbuf[tmp]]))
 
     Tbuf[Padj_new_u] = True
     Tbuf[Padj_u] = True
@@ -819,7 +922,7 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
                 dGS, dGE, dGI,
                 HS, HE, HI,
                 topo,
-                Tbuf, depth+1,
+                Fbuf, Tbuf, depth+1,
                 C, CP, CN, stats, tree)
         else:
             C, CP, CN, tree = BK_hier_dG(
@@ -828,7 +931,7 @@ def BK_hier_dG(Rbuf, RE, PX, PS, sep, XE, oldPS, oldXE, pos,
                 dGS, dGE, dGI,
                 HS, HE, HI,
                 topo,
-                Tbuf, depth+1,
+                Fbuf, Tbuf, depth+1,
                 btw_new, btw_stack, btw_end + btw_added,
                 C, CP, CN, stats, tree)
             
@@ -863,7 +966,7 @@ def BK_hier_dG_py(G, dG, H, verbose=False):
         dG.indptr[:-1], dG.indptr[1:], dG.indices,
         H.indptr[:-1], H.indptr[1:], H.indices,
         topo,
-        Tbuf, 0,
+        Fbuf, Tbuf, 0,
         btw_new, btw_stack, btw_end,
         C, CP, CN,
         stats, tree)

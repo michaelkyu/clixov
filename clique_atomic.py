@@ -2,7 +2,7 @@ import numpy as np
 import numpy.random
 from numba import jit
 
-from constants import cache
+from constants import cache, parallel
 
 def initialize_structures(k, PX=None):
     if PX is None:
@@ -33,18 +33,18 @@ def initialize_structures(k, PX=None):
     return PX, pos, R, R_end, sep, PS, sep, XE, Fbuf, Tbuf, C, CP, CN, btw_new, btw_stack, btw_end, stats, tree
 
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def trim_cliques(cliques, cliques_indptr, cliques_n):
     return cliques[:cliques_indptr[cliques_n]], cliques_indptr[:cliques_n+1], cliques_n
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def swap_pos(PX, pos, w, PX_idx):
     pos_w = pos[w]
     b = PX[PX_idx]
     PX[PX_idx], PX[pos_w] = w, b
     pos[w], pos[b] = PX_idx, pos_w
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_cliques(C, CP, CN, R):    
     next_CP = CP[CN] + R.size
     if next_CP > C.size:
@@ -57,7 +57,7 @@ def update_cliques(C, CP, CN, R):
     CP[new_CN] = CP[CN] + R.size
     return C, CP, new_CN
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
     # Move P and X to the bottom
     for w_i in range(GS[v], GE[v]):
@@ -72,7 +72,19 @@ def move_PX(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
             curr += 1
     return v_degree, curr
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
+def move_PX_count(GI, GS, GE, pos, PS, XE, sep, v_degree, v, to_count):
+    # Move P and X to the bottom
+    for w_i in range(GS[v], GE[v]):
+        w = GI[w_i]
+        w_pos = pos[w]
+        if w_pos < oldPS or w_pos >= oldXE:
+            break
+        elif PS <= w_pos and w_pos < XE:
+            v_degree += to_count[v] and (w_pos < sep)            
+    return v_degree
+
+@jit(nopython=True, cache=cache, parallel=parallel)
 def move_PX_2(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
     # Move P and X to the bottom
     for w_i in range(GS[v], GE[v], 2):
@@ -86,7 +98,7 @@ def move_PX_2(GI, GS, GE, pos, oldPS, oldXE, PS, XE, sep, v_degree, v, curr):
             curr += 2
     return v_degree, curr
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
     for w in GI[GS[v] : GE[v]]:
         w_pos = pos[w]
@@ -100,7 +112,43 @@ def update_PX(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE)
             break
     return new_PS, new_XE
 
+@jit(nopython=True, cache=cache, parallel=parallel)
+def update_PX_deg(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE, deg):
+    for w in GI[GS[v] : GE[v]]:
+        w_pos = pos[w]
+        if (PS <= w_pos) and (w_pos < sep):
+            new_PS -= 1
+            swap_pos(PX, pos, w, new_PS)
+            deg[w] += 1
+        elif (sep <= w_pos) and (w_pos < XE):
+            swap_pos(PX, pos, w, new_XE)
+            new_XE += 1
+        else:
+            break
+    return new_PS, new_XE
+
 @jit(nopython=True, cache=cache)
+def restore_deg(GI, GS, GE, PX, pos, v, new_PS, sep, oldPS, oldXE, deg):
+    for w in GI[GS[v]:GE[v]]:
+        w_pos = pos[w]
+        if (new_PS <= w_pos) and (w_pos < sep):
+            deg[w] -=1
+        elif w_pos < oldPS or w_pos >= oldXE:
+            break
+
+@jit(nopython=True, cache=cache)
+def update_PX_H(HI, HS, HE, PX, pos, new_PS, sep, oldPS, oldXE, v):
+    for w in HI[HS[v] : HE[v]]:
+        w_pos = pos[w]
+        if (new_PS <= w_pos) and (w_pos < sep):                
+            swap_pos(PX, pos, w, new_PS)
+            new_PS += 1
+        elif (w_pos < oldPS) or (w_pos >= oldXE):
+            break
+    return new_PS
+
+
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_PX_skip(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, new_XE):
     for w in GI[GS[v] : GE[v]]:
         w_pos = pos[w]
@@ -114,19 +162,19 @@ def update_PX_skip(GI, GS, GE, oldPS, oldXE, PS, XE, sep, PX, pos, v, new_PS, ne
             break
     return new_PS, new_XE
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def expand_2d_arr(arr):
     arr2 = np.zeros((2*arr.shape[1], arr.shape[0]), arr.dtype).T
     arr2[:,:arr.shape[1]] = arr
     return arr2
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def expand_1d_arr(arr):
     arr2 = np.zeros(2*arr.size, arr.dtype)
     arr2[:arr.size] = arr
     return arr2
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def move_PX_fast(GI, GS, GE, pos, PS, sep, v):
     """Assumes X is not used, and that all v from GS to GE must be
     traversed.
@@ -144,7 +192,7 @@ def move_PX_fast(GI, GS, GE, pos, PS, sep, v):
     return curr - GS[v], curr
 
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def move_PX_fast_bool(GI, GS, GE, in_P, v):
     """Assumes X is not used, and that all v from GS to GE must be
     traversed"""
@@ -158,7 +206,7 @@ def move_PX_fast_bool(GI, GS, GE, in_P, v):
             curr += 1
     return curr, GS[v] + curr
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def move_PX_fast_bool_unused(GI, GS, GE, in_P, used, v):
     """Assumes X is not used, and that all v from GS to GE must be
     traversed"""
@@ -175,7 +223,7 @@ def move_PX_fast_bool_unused(GI, GS, GE, in_P, used, v):
             curr += 1
     return curr, GS[v] + curr
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_PX_bool_color(GI, GS, GE,
                          GI_new, GS_new, GE_end,
                          nei_bool, colors_v, in_P, pos, PX, sep, v):
@@ -198,7 +246,7 @@ def update_PX_bool_color(GI, GS, GE,
     nei_bool[colors_v[PX[new_PS : sep]]] = False
     return new_PS, nei_count
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_tree_size(tree_size, depth, max_cover):
     curr_tree_size = 4 + tree_size[0, 0]
     if tree_size.shape[1] <= curr_tree_size:
@@ -209,7 +257,7 @@ def update_tree_size(tree_size, depth, max_cover):
     
     return tree_size, curr_tree_size
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_tree_size_branch(tree_size, curr_tree_size, v, bound, P_size):
     sub_tree_size = 4 + tree_size[0, 0]
     if tree_size.shape[1] <= sub_tree_size:  tree_size = expand_2d_arr(tree_size)
@@ -219,7 +267,7 @@ def update_tree_size_branch(tree_size, curr_tree_size, v, bound, P_size):
     tree_size[5, sub_tree_size] = P_size
     return tree_size
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def update_P(GI, GS, GE, PX, old_sep, sep, pos, v):
     new_sep = 0
         
@@ -231,7 +279,7 @@ def update_P(GI, GS, GE, PX, old_sep, sep, pos, v):
             new_sep += 1   
     return new_sep, PX[ : new_sep]
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def reduce_G(GI, GS, GE,
              PXbuf, core_nums, core_bound, PX, pos, sep):
     ### Modifies GE[u] through move_PX_fast_bool
@@ -274,7 +322,7 @@ def get_unique_cliques_exact(C, CP, CN):
     D, DP, DN = trim_cliques(D, DP, DN)
     return D, DP, DN
 
-@jit(nopython=True, cache=cache)
+@jit(nopython=True, cache=cache, parallel=parallel)
 def get_unique_cliques(C, CP, CN, n):
     # Filter for a set of unique cliques. Fast implementation using
     # randomized algorithm for computing a hash for each clique. Has
